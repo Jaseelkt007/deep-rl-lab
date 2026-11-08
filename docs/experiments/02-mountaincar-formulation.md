@@ -1,6 +1,6 @@
 # 02 · MountainCar: how the RL formulation changes what can be learned
 
-**Status:** predictions written down before the runs (this commit). Results are added below afterwards.
+**Status:** done. Predictions committed before the runs (6e34c23), amended before the runs started (ad7c835); results below.
 
 ## Background
 
@@ -62,4 +62,40 @@ Corrected prediction for "bootstrap off (bug)": no success. V converges near −
 
 ## Results
 
-*(pending)*
+Computed by `uv run python scripts/experiments.py analyse 02-mountaincar-formulation` (500 episodes, seeds 10–14). The known answers are read from the last logged episode (episode 476).
+
+| Setup | Seeds with any success | Success rate, last 100 (per seed) | Mean \|δ\|, last 100 | Entropy, last 100 |
+|---|---|---|---|---|
+| plain | 0/5 | 0 | 7e-5 | **≈ 1e-5** |
+| bootstrap off (bug) | 1/5 (s10: 9 successes, first at ep 442) | 0.09, 0, 0, 0, 0 | 0.67 | 1e-8 … 0.03 |
+| time input + bootstrap off | 2/5 (s12: 13, s14: 1) | 0, 0, 0.10, 0, 0 | 0.67–0.86 | 0.01–0.05 |
+| shaping (energy) | **5/5** | 0.0, **1.0, 0.99, 0.88**, 0.17 | 0.4–1.6 | 0.015–0.024 |
+| n-step 10, GAE 0.95 | 0/5 | 0 | 6e-5 | ≈ 4e-5 |
+| entropy 0.01 | 0/5 | 0 | 7e-5 | **1.10 (= ln 3, uniform)** |
+
+### Known answers
+
+| Setup | Known answer | Observed (5 seeds) |
+|---|---|---|
+| plain | V ≈ −100 for all t; δ ≈ 0 | ✓ V = −100.0 at t = 0 and t = 199; δ ≈ 1e-7 (t < 199) and ≤ 1.4e-4 (t = 199) |
+| bootstrap off (bug) | V ≈ −66.9; δ ≈ −0.33 (t < 199); δ ≈ +65.9 (t = 199) | ✓ V = −68.8 to −69.2 on the last episode (mean V over the last 100 episodes −66.9 to −67.2); δ = −0.328; **δ = +68.2 at the time limit** (= −1 − V(s₁₉₉)) |
+| time input + bootstrap off | V(t) = −(1 − 0.99^(200−t))/0.01: −86.6 at t = 0, −1.0 at t = 199 | **✗ only partly.** V(t=0) −68.7 to −83.9, V(t=199) −50.7 to −69.2. On s11 and s13 the critic ignored the time input entirely and sat at the bug's constant (−68.7/−69.1, δ = +68 at the limit). On the other three it learned only part of the slope. |
+
+### Predicted vs observed
+
+| Setup | Predicted | Observed |
+|---|---|---|
+| plain | no success; V → −100; δ → 0 | ✓ exactly. **Also (observation, not pre-registered): the policy became deterministic** (entropy ≈ 1e-5) with zero signal: Adam turned δ ≈ 1e-7 into full-size steps. |
+| bootstrap off (bug) | no success; V ≈ −66.9; δ ≈ −0.33, with a +65.9 spike at the time limit | ✓ the numbers match. One seed reached the flag 9 times late in training: the spike rewards whatever happens at t = 199, a systematic artefact, and here it occasionally pushed the car up. |
+| time input + bootstrap off | correct finite-horizon V(t); still no success signal | **✗ the critic mostly did not learn V(t)** (see the known answers); 2/5 seeds reached the flag a few times |
+| shaping (energy) | learns: successes appear, the success rate rises | ✓ on 3/5 seeds (success ≥ 0.88 over the last 100). s14 reached 0.17. **s10 succeeded once at episode 11, then fell back to V = −100, δ ≈ 0 and a deterministic policy**: shaping gave a signal, but the policy collapsed before it was used. |
+| n-step 10, GAE 0.95 | no help until the goal is reached once; most likely no success | ✓ 0/5; identical to plain (V = −100, δ ≈ 0) |
+| entropy 0.01 | more random wandering; rarely enough to learn | ✓ 0/5. With δ ≈ 0 only the entropy gradient acts, so the policy stays exactly uniform (H = ln 3) |
+
+### What this means
+
+1. **No signal means no learning, however correct the critic is.** plain, n-step and entropy all sit at V = −100, δ ≈ 0. Multi-step returns cannot spread a reward that never arrives, and the entropy bonus can only make the random walk uniform.
+2. **With Adam, "no signal" does not mean "no change".** Plain MountainCar ends with a deterministic policy (entropy ≈ 1e-5) that was built entirely from noise. This is the same mechanism experiment 03 tests on CartPole, where success, not failure, removes the signal.
+3. **The time-limit bug is an artefact you can compute exactly.** V ≈ −67 and δ ≈ +68 on the last step of every episode, which the dashboard's δ chart shows as a spike at t = 199.
+4. **Giving the time to the critic is not enough by itself:** the critic often ignored the extra input. A Markov problem does not guarantee that a small network uses the input.
+5. **A formulation change (potential shaping) is what works.** It was the only setup that learned, on 3/5 seeds within 500 episodes. Even shaping is not robust with plain one-step actor-critic: one seed collapsed to a deterministic no-signal policy after its first success.
