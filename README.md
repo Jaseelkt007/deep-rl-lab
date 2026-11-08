@@ -39,7 +39,12 @@ A good first session:
 |---|---|
 | ![plain](docs/img/maps-plain.png) | ![shaping](docs/img/maps-shaping.png) |
 
-What fixes it is a change to the *problem formulation*. Potential-based shaping gives δ a signal before the goal is ever reached. See experiment 02.
+What fixes it is a change to the *problem formulation*. [Experiment 02](docs/experiments/02-mountaincar-formulation.md), 5 seeds, 500 episodes:
+
+- **Potential-based shaping** (energy) is the only setup that learns: 5/5 seeds reach the flag, and 3/5 succeed in ≥ 88% of the last 100 episodes.
+- **n-step/GAE** and the **entropy bonus** stay at V = −100 and δ ≈ 0 (0/5): they cannot spread a reward that never arrives.
+- **The time-limit bug** produces exactly its computed artefact: V ≈ −67, δ ≈ −0.33 on ordinary steps and **+68 on the last step** of every episode.
+- **Plain** ends with a fully deterministic policy (entropy ≈ 1e-5) built from noise alone.
 
 ### CartPole-v1: learns, then collapses
 
@@ -172,7 +177,11 @@ Hypotheses, predictions and decision rules are committed **before** the runs; re
   - Value normalisation removes the critic saturation, but not the collapse.
   - SGD at 20× the LR diverges.
   - The entropy bonus lets returns recover.
-- [02 · MountainCar: how the formulation changes what can be learned](docs/experiments/02-mountaincar-formulation.md): plain, the bootstrap bug (with an exact TD fixed point at V = −66.9), time input, shaping, n-step/GAE, entropy.
+- [02 · MountainCar: how the formulation changes what can be learned](docs/experiments/02-mountaincar-formulation.md)
+  - Only potential shaping learns.
+  - The bootstrap bug's exact TD fixed point (V = −66.9, δ ≈ +66 at the limit) shows up in the logs.
+  - A time-left input alone is mostly ignored by the critic.
+- [03 · Is the CartPole collapse Adam amplifying a no-signal δ?](docs/experiments/03-cartpole-no-signal-at-success.md) (running)
 
 ## Project structure
 
