@@ -190,7 +190,7 @@ Hypotheses, predictions and decision rules are committed **before** the runs; re
   - The bootstrap bug's exact TD fixed point (V = −66.9, δ ≈ +66 at the limit) shows up in the logs.
   - A time-left input alone is mostly ignored by the critic.
 - [03 · Is the CartPole collapse Adam amplifying a no-signal δ?](docs/experiments/03-cartpole-no-signal-at-success.md), 10 held-out seeds:
-  - The collapse starts in a success streak where |δ| ≈ 0 and Adam's step is ≥ 10⁷× larger relative to the gradient than during learning.
+  - The collapse starts in a success streak where |δ| ≈ 0 and the actor's gradient is ≈ 0, but Adam still takes full-size steps.
   - A larger Adam ε **for the actor only** (1e-3) prevented every collapse (0/8 vs 4/8, p = 0.038) and kept all learned runs solved.
   - Formally not decidable: the control collapsed in 50% of its learned seeds, below the registered 60%.
 

@@ -68,13 +68,14 @@ def learned_values(tr: Trainer, states: list[np.ndarray]) -> np.ndarray:
     return tr.agent.evaluate(x)[2].numpy()
 
 
-@pytest.mark.parametrize("n_step", [1, 3])
-def test_critic_learns_the_exact_chain_values(n_step):
+@pytest.mark.parametrize("n_step,value_norm", [(1, False), (3, False), (1, True)])
+def test_critic_learns_the_exact_chain_values(n_step, value_norm):
     """SGD, because its step is lr·δ·∇V: at the fixed point δ = 0 and it stops. Adam's step
     stays ~lr even when δ ≈ 0, so with Adam V hovers around the answer instead of settling
     (it does reach it: lr 3e-3 gives the exact values after ~3000 episodes)."""
     exact = np.array([sum(GAMMA**j for j in range(ChainEnv.N - k)) for k in range(ChainEnv.N)])
     cfg = RunConfig(gamma=GAMMA, n_step=n_step, num_episodes=600, optimizer="sgd", critic_lr=0.05, actor_lr=0.01,
+                    value_norm=value_norm,  # with value_norm: output-preserving (V reported in raw units)
                     snapshot_every=10**6, state_probe_every=10**6, checkpoint_every=10**6)
     tr = Trainer(cfg, env=ChainEnv())
     tr.run()

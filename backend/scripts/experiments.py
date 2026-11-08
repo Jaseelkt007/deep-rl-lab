@@ -57,6 +57,12 @@ EXPERIMENTS: dict[str, dict] = {
             "entropy 0.01 + value_norm": {"entropy_beta": 0.01, "value_norm": True},
         },
     },
+    # 03b: ONE confirmatory comparison on 20 new held-out seeds (pre-registered; needs the user's go-ahead)
+    "03b-confirm-actor-eps": {
+        "base": {"env_id": "CartPole-v1", "num_episodes": 1000, "log_steps_every": 100, **CHECK_LRS},
+        "seeds": list(range(20, 40)),
+        "setups": {"control": {}, "actor adam eps 1e-3": {"actor_adam_eps": 1e-3}},
+    },
     "02-mountaincar-formulation": {
         "base": {"env_id": "MountainCar-v0", "num_episodes": 500, "log_steps_every": 25},
         "seeds": [10, 11, 12, 13, 14],
@@ -182,7 +188,9 @@ RULES = {
     "01-cartpole-collapse": (lambda col, n, stays: col <= 1 and stays >= 0.8, lambda c_col, c_n: c_col >= 4),
     "03-cartpole-no-signal": (lambda col, n, stays: col <= 0.2 * n, lambda c_col, c_n: c_n > 0 and c_col >= 0.6 * c_n),
 }
-MIN_LEARNED = {"01-cartpole-collapse": 3, "03-cartpole-no-signal": 5}
+MIN_LEARNED = {"01-cartpole-collapse": 3, "03-cartpole-no-signal": 5, "03b-confirm-actor-eps": 10}
+#   03b (20 seeds): fix = collapsed <= 20% of learned AND one-sided Fisher p < 0.05 vs control
+#                   (replaces the control-rate precondition); inconclusive if < 10 learned in either arm.
 
 
 def fisher_one_sided(a_col: int, a_n: int, b_col: int, b_n: int) -> float:
@@ -204,8 +212,14 @@ def verdict_01(rows: list[dict], control_rows: list[dict], exp: str = "01-cartpo
     c_learned = [r for r in control_rows if r["learned"]]
     c_collapsed = sum(r["collapsed"] for r in c_learned)
     p = fisher_one_sided(collapsed, len(learned), c_collapsed, len(c_learned)) if c_learned else float("nan")
-    arm_rule, control_rule = RULES.get(exp, RULES["01-cartpole-collapse"])
     tail = f"; one-sided Fisher vs control p = {p:.3f}"
+    if exp == "03b-confirm-actor-eps":
+        if len(c_learned) < MIN_LEARNED[exp]:
+            return f"INCONCLUSIVE (control learned on {len(c_learned)} seeds){tail}"
+        ok = collapsed <= 0.2 * len(learned) and p < 0.05
+        return (f"{'FIXES' if ok else 'does not fix'} (collapsed {collapsed}/{len(learned)}, median stays_solved "
+                f"{stays:.2f}; control {c_collapsed}/{len(c_learned)}{tail})")
+    arm_rule, control_rule = RULES.get(exp, RULES["01-cartpole-collapse"])
     arm_ok, control_ok = arm_rule(collapsed, len(learned), stays), control_rule(c_collapsed, len(c_learned))
     if arm_ok and not control_ok:
         return (f"NOT DECIDABLE: the arm meets the fix condition (collapsed {collapsed}/{len(learned)}, median "
@@ -263,8 +277,10 @@ def support_03(out: dict[str, list[dict]]) -> None:
         amps = [r["amp_ratio"] for r in ctrl]
         dr = float(np.median([r["delta_ratio"] for r in ctrl]))
         c1 = trunc >= 0.5 and float(np.median(amps)) >= 10 and dr <= 0.2
+        # above ~1e6 the ratio is not a measurement: the gradient is numerically 0 (π(a|s) rounds to 1)
+        amp_txt = ", ".join("> 1e6 (gradient ≈ 0)" if a > 1e6 else f"{a:.2g}" for a in amps)
         print(f"  1. control runs that collapse: {len(ctrl)}; median truncated share {trunc:.2f} (>= 0.5), "
-              f"amp_ratio {', '.join(f'{a:.2g}' for a in amps)} (median >= 10), median delta_ratio {dr:.2g} (<= 0.2) "
+              f"amp_ratio {amp_txt} (median >= 10), median delta_ratio {dr:.2g} (<= 0.2) "
               f"-> {'MET' if c1 else 'NOT MET'}")
     verdicts = {arm: verdict_01(out.get(arm, []), out.get("control", []), "03-cartpole-no-signal")
                 for arm in ("actor adam eps 1e-3", "actor sgd")}

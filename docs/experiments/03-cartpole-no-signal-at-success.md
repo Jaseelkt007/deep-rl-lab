@@ -122,15 +122,19 @@ Computed by `support_03()` in `scripts/experiments.py`, printed as a separate bl
 
 1. **The pre-collapse window is a no-signal success streak. ✓ in 3 of the 4 control runs that collapse.**
    - Truncated share: 1.0, 0.28, 1.0, 1.0 (median 1.0).
-   - Amplification vs the learning phase: 1.9e7×, 8.8e17×, 3.9e7×, 4.9e11× (all ≥ 10×).
+   - Amplification vs the learning phase: **> 1e6× in all four**. Above ~1e6 the ratio is not a measurement: the actor gradient is numerically ≈ 0 once π(a|s) rounds to 1.
    - |δ| vs the learning phase: 0.00095, 0.48, 0.00069, 0.00006 (median ≈ 0.0008 ≤ 0.2).
    - The exception is s12: its collapse did not start inside a success streak (truncated share 0.28, δ ratio 0.48).
    - The same window pattern also appears in the four control runs where entropy fell below 0.1 but the policy *stayed* good (s14–s17): a deterministic policy that balances is not a failure by itself.
 2. **adam ε 1e-3 or actor SGD fixes it. ✗ formally (not decidable).** The control collapsed in only 50% of its learned seeds, below the 60% the rule requires. Descriptively, ε 1e-3: 0/8 collapsed vs 4/8 (p = 0.038).
 3. **The collapse share falls monotonically: control ≥ ε 1e-5 ≥ ε 1e-3. ✓** 4/8 ≥ 3/8 ≥ 0/8.
 
+**Every learned control run went deterministic: 8/8** reached entropy < 0.1, always during a success streak, and 4 of them still collapsed. So the drift happens in every success streak; whether the deterministic policy it lands on still balances is closer to luck. Actor ε 1e-3 stops the drift itself (entropy never < 0.1 in 8/8), which is why it prevented every collapse.
+
+**Multiple comparisons.** p = 0.038 was one of 5 arm-vs-control comparisons. A Bonferroni threshold would be 0.05/5 = 0.01, so it would **not** survive correction. That is why the follow-up (03b) is a single confirmatory comparison.
+
 **Conclusion.** The hypothesis is **not formally confirmed**, because criterion 2 could not be decided under the rule as registered. The evidence points its way:
-- the collapse starts in a no-signal success streak where Adam's step is 10⁷× or more larger relative to the gradient than during learning;
+- the collapse starts in a no-signal success streak where the actor's gradient is ≈ 0 but Adam still takes full-size steps (amplification > 1e6× the learning phase);
 - actor ε 1e-3, which removes exactly that amplification and only for the actor, prevented every collapse and kept every learned run solved;
 - the collapse share falls with ε.
 
@@ -152,4 +156,14 @@ Two things do not fit the pure story:
 ### Next
 
 - **03b (confirmatory):** control vs actor ε 1e-3 only, on 20 new held-out seeds (20–39), with the same rule, written down before running. With 20 seeds per arm the precondition question also gets a better estimate of the control's collapse rate.
-- Why entropy + value_norm (with the output-preserving fix) prevents learning: not explained yet.
+- Why entropy + value_norm (with the output-preserving fix) prevents learning: not explained yet. Checks so far:
+  - **Not a bug in value_norm:** the chain known-answer test passes with output-preserving value_norm (SGD, Σγʲ within 5%).
+  - **Post-hoc, episodes 1–300, median over seeds.** The prediction from review was "β dominates once |A| shrinks, so the policy is held near uniform". That is **refuted**: the policy is *more* deterministic, not less.
+
+    | Arm | Entropy | \|δ\| | EV | π(a\|s) | Mean δ |
+    |---|---|---|---|---|---|
+    | entropy + value_norm | 0.26 | 0.68 | 0.34 | 0.80 | ≈ 0 (unbiased) |
+    | 01's entropy-only | 0.45 | 1.40 | 0.03 | 0.72 | |
+    | 03 control | 0.40 | 0.55 | 0.01 | 0.73 | |
+
+    The critic is *more* informative and δ is unbiased, yet the policy goes deterministic early without learning. The cause is open.
