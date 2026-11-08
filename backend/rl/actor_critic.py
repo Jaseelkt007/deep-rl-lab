@@ -85,8 +85,11 @@ class RunningNorm:
         return (x - mean) / (math.sqrt(var) + 1e-8)
 
 
-def _norm(tensors) -> float:
-    return math.sqrt(sum(float(t.pow(2).sum()) for t in tensors))
+def _layer_norms(tensors: list[torch.Tensor]) -> tuple[float, list[float]]:
+    """L2 norm of [W1, b1, W2, b2, …]: (total, per layer (W, b) pair). One batched call."""
+    n = torch.stack(torch._foreach_norm([t.detach() for t in tensors])).double().pow(2)
+    per_layer = (n[0::2] + n[1::2]).sqrt().tolist()
+    return math.sqrt(float(n.sum())), per_layer
 
 
 class ActorCritic:
@@ -96,8 +99,14 @@ class ActorCritic:
         self.lam = 1.0 if cfg.gae_lambda is None else cfg.gae_lambda
         self.actor = Actor(obs_dim, n_actions, cfg.hidden_sizes, cfg.activation)
         self.critic = Critic(obs_dim, cfg.hidden_sizes, cfg.activation)
-        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=cfg.actor_lr)
-        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=cfg.critic_lr)
+        # Parameters in layer order [W1, b1, W2, b2, …, W_out, b_out], for per-layer stats.
+        self.params = {
+            net: [t for _, layer in model.linear_layers() for t in (layer.weight, layer.bias)]
+            for net, model in (("actor", self.actor), ("critic", self.critic))
+        }
+        # fused Adam: same algorithm, ~2x faster for many tiny steps on CPU
+        self.actor_opt = torch.optim.Adam(self.params["actor"], lr=cfg.actor_lr, fused=True)
+        self.critic_opt = torch.optim.Adam(self.params["critic"], lr=cfg.critic_lr, fused=True)
         self.adv_norm = RunningNorm() if cfg.adv_norm else None
 
     # ------------------------------------------------------------------ acting
@@ -167,27 +176,20 @@ class ActorCritic:
         self.critic_opt.zero_grad(set_to_none=False)
         actor_loss.backward()
         critic_loss.backward()
-        a_params, c_params = list(self.actor.parameters()), list(self.critic.parameters())
-        gn_a, gn_c = _norm(p.grad for p in a_params), _norm(p.grad for p in c_params)
-        layer_grads = {
-            "actor": [_norm([l.weight.grad, l.bias.grad]) for _, l in self.actor.linear_layers()],
-            "critic": [_norm([l.weight.grad, l.bias.grad]) for _, l in self.critic.linear_layers()],
-        }
+        a_params, c_params = self.params["actor"], self.params["critic"]
+        gn_a, lg_a = _layer_norms([p.grad for p in a_params])
+        gn_c, lg_c = _layer_norms([p.grad for p in c_params])
         clip_a, clip_c = self._clip(gn_a, gn_c, a_params, c_params)
 
-        # --- optimiser steps, measuring how far the weights moved
-        before = {id(p): p.detach().clone() for p in a_params + c_params}
+        # --- optimiser steps, measuring how far the weights moved (‖Δw‖)
+        before = [p.detach().clone() for p in a_params + c_params]
         self.actor_opt.step()
         self.critic_opt.step()
-
-        def moved(ps):
-            return _norm(p.detach() - before[id(p)] for p in ps)
-
-        dw_a, dw_c = moved(a_params), moved(c_params)
-        layer_updates = {
-            "actor": [moved([l.weight, l.bias]) for _, l in self.actor.linear_layers()],
-            "critic": [moved([l.weight, l.bias]) for _, l in self.critic.linear_layers()],
-        }
+        diffs = torch._foreach_sub([p.detach() for p in a_params + c_params], before)
+        dw_a, lu_a = _layer_norms(diffs[: len(a_params)])
+        dw_c, lu_c = _layer_norms(diffs[len(a_params):])
+        layer_grads = {"actor": lg_a, "critic": lg_c}
+        layer_updates = {"actor": lu_a, "critic": lu_c}
 
         # --- the same state after the update: did the action become more likely?
         with torch.no_grad():
@@ -224,18 +226,13 @@ class ActorCritic:
             fa = fc = min(1.0, c / (math.sqrt(gn_a**2 + gn_c**2) + 1e-6))
         else:
             return 1.0, 1.0
-        for p in a_params:
-            p.grad.mul_(fa)
-        for p in c_params:
-            p.grad.mul_(fc)
+        torch._foreach_mul_([p.grad for p in a_params], fa)
+        torch._foreach_mul_([p.grad for p in c_params], fc)
         return fa, fc
 
     # ------------------------------------------------------------- inspection
     def layer_weight_norms(self) -> dict[str, list[float]]:
-        return {
-            "actor": [_norm([l.weight, l.bias]) for _, l in self.actor.linear_layers()],
-            "critic": [_norm([l.weight, l.bias]) for _, l in self.critic.linear_layers()],
-        }
+        return {net: _layer_norms(ps)[1] for net, ps in self.params.items()}
 
     def state_dict(self) -> dict:
         return {"actor": self.actor.state_dict(), "critic": self.critic.state_dict()}

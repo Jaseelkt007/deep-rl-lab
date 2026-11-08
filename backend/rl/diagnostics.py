@@ -36,7 +36,8 @@ def explained_variance(pred: Sequence[float], target: Sequence[float]) -> float 
     """
     pred, target = np.asarray(pred, dtype=np.float64), np.asarray(target, dtype=np.float64)
     var = target.var()
-    if len(target) < 2 or var < 1e-10:
+    # "does not vary": relative to the size of the returns (V ≈ −100 ± 1e-4 is constant)
+    if len(target) < 2 or var < 1e-8 * max(1.0, float(np.mean(target**2))):
         return None
     return float(1.0 - (target - pred).var() / var)
 
