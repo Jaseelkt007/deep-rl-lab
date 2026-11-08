@@ -189,6 +189,28 @@ def analyse(exp: str) -> dict:
     return out
 
 
+def posthoc_critic_before_collapse(exp: str = "01-cartpole-collapse", window: int = 50) -> None:
+    """POST-HOC (not pre-registered): was the critic informative just before the policy collapsed?
+    Median EV and corr(V, G) over the `window` episodes before MA10 entropy first drops below 0.1."""
+    for cfg_path in sorted(runs_dir().glob("*/config.json")):
+        meta = json.loads(cfg_path.read_text())
+        group = meta.get("group") or ""
+        if not group.startswith(exp + ": "):
+            continue
+        eps = load_episodes(cfg_path.parent)
+        ent_ep = first(ma(np.array([e["mean_entropy"] for e in eps]), 10) < 0.1)
+        setup = group.split(": ", 1)[1]
+        if ent_ep is None:
+            print(f"{setup:14s} s{meta['seed']}: entropy never < 0.1")
+            continue
+        win = eps[max(0, ent_ep - 1 - window): ent_ep - 1]
+        ev = [e["ev"] for e in win if e["ev"] is not None]
+        corr = [e["corr"] for e in win if e["corr"] is not None]
+        print(f"{setup:14s} s{meta['seed']}: entropy < 0.1 at ep {ent_ep}; median EV "
+              f"{_fmt(float(np.median(ev))) if ev else 'undefined (returns constant)'}, "
+              f"median corr(V,G) {_fmt(float(np.median(corr))) if corr else '-'}")
+
+
 def _fmt(v):
     if isinstance(v, float):
         return f"{v:.3g}"
@@ -197,9 +219,14 @@ def _fmt(v):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("action", choices=["run", "analyse"])
+    ap.add_argument("action", choices=["run", "analyse", "posthoc"])
     ap.add_argument("name", choices=list(EXPERIMENTS))
     ap.add_argument("--workers", type=int, default=9)
     ap.add_argument("--only", nargs="*", default=None, help="run only these setups (e.g. to rerun one arm)")
     a = ap.parse_args()
-    run(a.name, a.workers, a.only) if a.action == "run" else analyse(a.name)
+    if a.action == "run":
+        run(a.name, a.workers, a.only)
+    elif a.action == "posthoc":
+        posthoc_critic_before_collapse(a.name)
+    else:
+        analyse(a.name)

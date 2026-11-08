@@ -98,9 +98,27 @@ Per seed (best and final 100-episode moving average):
 ### What this means
 
 1. **The target-scale hypothesis is half right.** The large value target does cause the critic saturation: both arms that keep targets near 1 (value_norm, reward ×0.01) remove it completely. But **removing the saturation does not stop the collapse**. In the control, saturation reliably comes first, yet it is a correlated symptom, not the cause. Order is not causation, and the value_norm arm is what showed it.
-2. **The collapse is on the actor side.** Entropy still runs to < 0.1 in 4/5 value_norm runs and 5/5 reward ×0.01 runs. The only arm that clearly changes the outcome is the entropy bonus, which targets exactly that: returns degrade but recover.
+2. **Unsaturated is not the same as informative** (post-hoc check below). Entropy still runs to < 0.1 in 4/5 value_norm runs and 5/5 reward ×0.01 runs, but the critic was often still useless just before that. The evidence is mixed:
+   - sometimes the critic stays uninformative even without saturation;
+   - sometimes the actor collapses despite an informative critic.
+
+   So "the collapse is actor-side" would be too strong. The only arm that clearly changes the outcome is the entropy bonus, which acts on the actor: returns degrade but recover.
 3. **SGD diverging supports the target-scale story for the critic.** With SGD the critic's step is lr·δ·∇V, so it grows with the target. Critic lr 5e-2 is stable on the 5-state chain (targets ≤ 4.1, `tests/test_known_values.py`) and explodes on CartPole, where targets head towards 100.
 4. **Procedural note.** The SGD arm was first run with an older trainer that crashed on NaN (in an SVD at the end of an episode) instead of recording divergence. The arm was rerun with the **identical pre-registered config**; only the recording code changed. Every shared episode record matched the crashed runs exactly (training is deterministic, one thread per process). The new code stops 3–4 episodes earlier, at the first non-finite update instead of the later crash. The crashed copies were deleted after the check.
+
+### Post-hoc check (not pre-registered): was the critic informative just before the collapse?
+
+Median critic EV and corr(V, G) over the 50 episodes before MA10 entropy first drops below 0.1
+(`uv run python scripts/experiments.py posthoc 01-cartpole-collapse`):
+
+| Setup | Critic in the 50 episodes before entropy < 0.1 |
+|---|---|
+| control | corr ≈ 0.01 in 3/5 runs, where EV is undefined because the returns were constant (500-step episodes); s12 informative (EV 0.84, corr 0.90); s10 EV −0.01, corr −0.42 |
+| value_norm | **uninformative in 3 of the 4 runs that collapse**: EV −137 / −74 / −97, corr ≈ 0.0–0.04; s10 corr 0.89 but EV 0.04 |
+| reward ×0.01 | informative in **2/5** (EV 0.91 and 0.84, corr 0.98 and 0.97), and those runs collapsed anyway; 3/5 uninformative (EV ≈ −50, corr 0.01–0.17) |
+| entropy 0.01 | mixed: s11 EV 0.23, corr 0.80; s10 and s13 negative |
+
+So removing saturation did not make the critic informative in most runs. value_norm's large negative EV comes partly from σ moving under a critic that is not output-preserving. And in at least two runs the actor collapsed while the critic was clearly informative. Both mechanisms seem to be at work. Experiment 03 tests the actor side directly.
 
 ### Next (exploratory, not pre-registered here)
 
