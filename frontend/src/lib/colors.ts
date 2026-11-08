@@ -1,5 +1,12 @@
-// One palette for the whole app (validated with the dataviz skill's checker).
-// Actor = blue, critic = orange everywhere; δ sign = aqua (+) / red (−), always with a sign or arrow.
+// One palette for the whole app, checked with the dataviz skill's validate_palette.js
+// (light mode, surface #fcfcfb):
+//   series (8)            PASS, worst adjacent CVD ΔE 9.1 (amber↔aqua, protan)
+//   actor ↔ critic        PASS, ΔE 24.7
+//   δ aqua ↔ red          CVD ΔE 6.9 (deutan): inside the 6–8 band, legal ONLY with secondary
+//                         encoding -> every δ colour comes with a ± sign or ↑/↓ arrow, and the
+//                         δ heatmap tooltip shows the signed number.
+//   contrast WARN         aqua, amber, pink < 3:1 on white -> direct labels / numbers next to them.
+// Actor = blue, critic = orange everywhere.
 
 export const C = {
   ink: "#0b0b0b",
@@ -15,8 +22,11 @@ export const C = {
   neutral: "#f0efec",
   marker1: "#6250d6",
   marker2: "#eda100",
-  // categorical order for compare groups / multi-series
+  // categorical order for multi-series charts (layers, probe modes)
   series: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"],
+  // compare-page groups: skips actor blue / critic orange / δ red, so a group colour never
+  // reads as "actor", "critic" or "negative"; more than 5 groups also get dash patterns.
+  groups: ["#1baf7a", "#6250d6", "#eda100", "#e87ba4", "#008300"],
 };
 
 // Actions: left / none / right (CartPole: left / right)
