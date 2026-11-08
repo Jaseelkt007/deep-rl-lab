@@ -146,3 +146,11 @@ def test_logged_values_are_raw_units_with_value_norm():
     v_net = tr.agent.critic(x)[0].item()
     assert float(tr.agent.evaluate(x)[2][0]) == pytest.approx(v_net * tr.agent.v_scale, rel=1e-5)  # ... V = σ·ṽ
     assert abs(steps[-1]["v"]) > 5 * abs(v_net)  # logged V is in reward units, not network units
+
+
+def test_divergence_is_recorded_and_stops_the_run():
+    recs = collect(RunConfig(env_id="CartPole-v1", num_episodes=200, optimizer="sgd", critic_lr=5.0, actor_lr=1.0,
+                             snapshot_every=10**6, state_probe_every=10**6, checkpoint_every=10**6))
+    types = [r["type"] for r in recs]
+    assert "diverged" in types and types[-1] == "run_end" and recs[-1]["diverged"]
+    assert sum(t == "episode" for t in types) < 200

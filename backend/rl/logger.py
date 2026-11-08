@@ -107,8 +107,10 @@ class RunLogger:
             self.f.flush()
             if rec["ep"] % 10 == 0:
                 self._write_summary()
+        elif t == "diverged":
+            self.summary["diverged_at"] = rec["ep"]
         elif t == "run_end":
-            self.summary["status"] = "finished"
+            self.summary["status"] = "diverged" if rec.get("diverged") else "finished"
             self.close()
 
     def _write_summary(self) -> None:
@@ -154,6 +156,7 @@ class RunReader:
         self.probes: list[dict] = []
         self.step_ranges: dict[int, list[int]] = {}  # ep -> [start byte, end byte]
         self.finished = False
+        self.diverged: dict | None = None
         self.refresh()
 
     def refresh(self) -> None:
@@ -183,6 +186,8 @@ class RunReader:
                         self.run_start = rec
                     elif t == "run_end":
                         self.finished = True
+                    elif t == "diverged":
+                        self.diverged = rec
                 pos += len(line)
             self.offset = pos
 
@@ -199,7 +204,7 @@ class RunReader:
         s = self.dir / "summary.json"
         return {
             "meta": self.meta, "run_start": self.run_start, "episodes": self.episodes,
-            "snapshots": self.snapshots, "probes": self.probes, "finished": self.finished,
+            "snapshots": self.snapshots, "probes": self.probes, "finished": self.finished, "diverged": self.diverged,
             "episodes_with_steps": sorted(self.step_ranges),
             "summary": json.loads(s.read_text()) if s.exists() else None,
         }

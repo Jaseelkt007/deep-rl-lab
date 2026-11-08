@@ -56,10 +56,12 @@ def group_name(exp: str, setup: str) -> str:
     return f"{exp}: {setup}"
 
 
-def run(exp: str, workers: int) -> None:
+def run(exp: str, workers: int, only: list[str] | None = None) -> None:
     spec = EXPERIMENTS[exp]
     jobs = []
     for setup, over in spec["setups"].items():
+        if only and setup not in only:
+            continue
         for seed in spec["seeds"]:
             cfg = RunConfig.model_validate({**spec["base"], **over, "seed": seed})
             jobs.append((cfg.model_dump_json(), make_run_id(cfg), group_name(exp, setup)))
@@ -158,8 +160,15 @@ def analyse(exp: str) -> dict:
         if not group.startswith(exp + ": "):
             continue
         eps = load_episodes(cfg_path.parent)
-        if len(eps) < spec["base"]["num_episodes"]:
-            continue  # unfinished
+        summary = json.loads((cfg_path.parent / "summary.json").read_text())
+        diverged = summary.get("status") == "diverged"
+        if len(eps) < spec["base"]["num_episodes"] and not diverged:
+            continue  # unfinished (or crashed: rerun it)
+        if diverged:
+            out.setdefault(group.split(": ", 1)[1], []).append(
+                {"seed": meta["seed"], "diverged_at": summary.get("diverged_at"), "learned": False, "collapsed": False,
+                 "stays_solved": 0.0, "successes": 0, "success_last100": 0.0})
+            continue
         m = cartpole_metrics(eps) if cartpole else mountaincar_metrics(eps, cfg_path.parent)
         out.setdefault(group.split(": ", 1)[1], []).append({"seed": meta["seed"], **m})
     for setup in spec["setups"]:
@@ -189,5 +198,6 @@ if __name__ == "__main__":
     ap.add_argument("action", choices=["run", "analyse"])
     ap.add_argument("name", choices=list(EXPERIMENTS))
     ap.add_argument("--workers", type=int, default=9)
+    ap.add_argument("--only", nargs="*", default=None, help="run only these setups (e.g. to rerun one arm)")
     a = ap.parse_args()
-    run(a.name, a.workers) if a.action == "run" else analyse(a.name)
+    run(a.name, a.workers, a.only) if a.action == "run" else analyse(a.name)

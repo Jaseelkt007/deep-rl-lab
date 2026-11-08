@@ -125,6 +125,8 @@ class LiveRun:
         self._rate.append(time.perf_counter())
         if not alive:
             self.state, self._stop = "finished", True
+            if self.trainer.diverged:
+                self.error = f"Diverged in episode {self.trainer.episode + 1}: values became inf/NaN. Try smaller learning rates."
 
     def steps_per_sec(self) -> float:
         if len(self._rate) < 2 or time.perf_counter() - self._rate[-1] > 1.0:
@@ -288,11 +290,20 @@ def _reader(run_id: str) -> RunReader:
 LITE_DROP = ("layers", "hidden")
 
 
+def _lite(e: dict) -> dict:
+    out = {k: v for k, v in e.items() if k not in LITE_DROP}
+    hidden = e.get("hidden")
+    if hidden:
+        out["critic_sat"] = hidden["critic"][-1]["saturated"]
+        out["actor_sat"] = hidden["actor"][-1]["saturated"]
+    return out
+
+
 @app.get("/api/runs/{run_id}")
 def run_detail(run_id: str, lite: bool = False) -> dict:
     ov = _reader(run_id).overview()
-    if lite:  # for the compare page: scalar curves only
-        ov["episodes"] = [{k: v for k, v in e.items() if k not in LITE_DROP} for e in ov["episodes"]]
+    if lite:  # for the compare page: scalar curves only (+ last-layer saturation for the collapse chain)
+        ov["episodes"] = [_lite(e) for e in ov["episodes"]]
         ov["snapshots"] = []
     return ov
 

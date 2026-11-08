@@ -8,11 +8,13 @@ Record types (all JSON-serialisable except `checkpoint`):
   snapshot    phase-plane maps: V(s), greedy action, P(last action), mean δ, last trajectory
   probe       fixed-ranking probe: does the actor's choice depend on the state?
   checkpoint  network weights (the logger saves them, the server drops them)
+  diverged    values became inf/NaN (e.g. SGD with too large a learning rate); the run stops
   run_end
 """
 
 from __future__ import annotations
 
+import math
 import random
 import time
 from collections import deque
@@ -64,6 +66,7 @@ class Trainer:
         self.episode = 0  # completed episodes
         self.total_steps = 0
         self.finished = False
+        self.diverged = False
         self._seen_since_snapshot: list[tuple[float, float, float]] = []  # (x, y, δ) for the δ map
         self._seen_since_probe: deque = deque(maxlen=5000)  # (obs, t) for the probe
         self.last_traj: list[list[float]] = []
@@ -116,14 +119,18 @@ class Trainer:
         self.total_steps += 1
         x2 = self._x(obs2, self.t)
 
-        if terminated or truncated:
-            # Flush: the last states get SHORTER windows that end at the episode end.
-            # Nothing crosses into the next episode.
-            boot = should_bootstrap(terminated, truncated, cfg.bootstrap_on_truncation)
-            while self.pending:
-                self._update_oldest(x2, boot, terminated, truncated)
-        elif len(self.pending) >= cfg.n_step:
-            self._update_oldest(x2, True, False, False)
+        try:
+            if terminated or truncated:
+                # Flush: the last states get SHORTER windows that end at the episode end.
+                # Nothing crosses into the next episode.
+                boot = should_bootstrap(terminated, truncated, cfg.bootstrap_on_truncation)
+                while self.pending:
+                    self._update_oldest(x2, boot, terminated, truncated)
+            elif len(self.pending) >= cfg.n_step:
+                self._update_oldest(x2, True, False, False)
+        except FloatingPointError as err:
+            self._diverge(str(err))
+            return False
 
         self.obs = obs2
         if terminated or truncated:
@@ -142,6 +149,9 @@ class Trainer:
         is_last = not self.pending
         weight = self.cfg.gamma ** tr["t"] if self.cfg.actor_discount_I else 1.0
         out = self.agent.update(xs, tr["a"], rewards, bootstrap, actor_weight=weight)
+        st = out["stats"]
+        if not all(math.isfinite(st[k]) for k in ("v", "v_after", "actor_loss", "critic_loss", "logp_after", "kl")):
+            raise FloatingPointError(f"non-finite values after an update (V(s) = {st['v_after']:.3g})")
         self._accumulate_layers(out)
         rec = {
             "type": "step", "ep": self.episode + 1, "t": tr["t"], "s": tr["s"].tolist(), "a": tr["a"],
@@ -154,6 +164,12 @@ class Trainer:
         dx, dy = self.info.phase_dims
         self._seen_since_snapshot.append((float(tr["s"][dx]), float(tr["s"][dy]), rec["delta"]))
         self.emit(rec)
+
+    def _diverge(self, reason: str) -> None:
+        """Values blew up: record it as an outcome of the run and stop."""
+        self.diverged = self.finished = True
+        self.emit({"type": "diverged", "ep": self.episode + 1, "total_steps": self.total_steps, "reason": reason})
+        self.emit({"type": "run_end", "ep": self.episode, "total_steps": self.total_steps, "diverged": True})
 
     def _accumulate_layers(self, out: dict) -> None:
         for net in ("actor", "critic"):
