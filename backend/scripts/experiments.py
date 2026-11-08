@@ -139,8 +139,10 @@ def mountaincar_metrics(eps: list[dict], run_dir: Path) -> dict:
 def verdict_01(rows: list[dict], control_rows: list[dict]) -> str:
     """Decision rule from docs/experiments/01 (amendment): collapse counted among learned seeds."""
     learned = [r for r in rows if r["learned"]]
+    diverged = sum(1 for r in rows if r.get("diverged_at") is not None)
     if len(learned) < 3:
-        return f"INCONCLUSIVE for collapse (learned on {len(learned)} seeds)"
+        return (f"INCONCLUSIVE for collapse (learned on {len(learned)} seeds; diverged on {diverged}, "
+                f"never learned on {len(rows) - len(learned) - diverged})")
     collapsed = sum(r["collapsed"] for r in learned)
     stays = float(np.median([r["stays_solved"] for r in learned]))
     c_learned = [r for r in control_rows if r["learned"]]
