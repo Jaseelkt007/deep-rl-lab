@@ -249,7 +249,37 @@ def analyse(exp: str) -> dict:
         elif rows:
             print(f"  -> any success {sum(r['successes'] > 0 for r in rows)}/{len(rows)}, "
                   f"success last100 mean {np.mean([r['success_last100'] for r in rows]):.2f}")
+    if exp == "03-cartpole-no-signal":
+        support_03(out)
     return out
+
+
+def support_03(out: dict[str, list[dict]]) -> None:
+    """The three support criteria of 03 (amendment 1), computed from the per-run metrics."""
+    ctrl = [r for r in out.get("control", []) if r["learned"] and r["collapsed"] and "pre_trunc_share" in r]
+    print("\n== 03 support criteria")
+    if ctrl:
+        trunc = float(np.median([r["pre_trunc_share"] for r in ctrl]))
+        amps = [r["amp_ratio"] for r in ctrl]
+        dr = float(np.median([r["delta_ratio"] for r in ctrl]))
+        c1 = trunc >= 0.5 and float(np.median(amps)) >= 10 and dr <= 0.2
+        print(f"  1. control runs that collapse: {len(ctrl)}; median truncated share {trunc:.2f} (>= 0.5), "
+              f"amp_ratio {', '.join(f'{a:.2g}' for a in amps)} (median >= 10), median delta_ratio {dr:.2g} (<= 0.2) "
+              f"-> {'MET' if c1 else 'NOT MET'}")
+    verdicts = {arm: verdict_01(out.get(arm, []), out.get("control", []), "03-cartpole-no-signal")
+                for arm in ("actor adam eps 1e-3", "actor sgd")}
+    c2 = any(v.startswith("FIXES") for v in verdicts.values())
+    undecidable = any(v.startswith("NOT DECIDABLE") for v in verdicts.values())
+    print(f"  2. eps 1e-3 or actor SGD fixes it -> {'MET' if c2 else ('NOT DECIDABLE' if undecidable else 'NOT MET')}")
+
+    def share(arm):
+        learned = [r for r in out.get(arm, []) if r["learned"]]
+        return sum(r["collapsed"] for r in learned) / len(learned) if learned else float("nan")
+
+    shares = [share(a) for a in ("control", "actor adam eps 1e-5", "actor adam eps 1e-3")]
+    c3 = shares[0] >= shares[1] >= shares[2]
+    print(f"  3. collapse share control {shares[0]:.2f} >= eps 1e-5 {shares[1]:.2f} >= eps 1e-3 {shares[2]:.2f} "
+          f"-> {'MET' if c3 else 'NOT MET'}")
 
 
 def posthoc_critic_before_collapse(exp: str = "01-cartpole-collapse", window: int = 50) -> None:

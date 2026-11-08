@@ -69,6 +69,13 @@ What a collapsing run shows, in order:
 
 **But order is not causation.** [Experiment 01](docs/experiments/01-cartpole-collapse.md) removed the saturation (value_norm, reward ×0.01) and the policy still collapsed. Only the entropy bonus let returns recover.
 
+The current picture, from [experiment 03](docs/experiments/03-cartpole-no-signal-at-success.md), is **no signal at success**:
+- Once the pole stays up for all 500 steps, every visited state is worth about +100. The critic is right and δ ≈ 0, the mirror image of MountainCar's −100.
+- Adam still turns that noise into full-size steps, and the policy drifts until it can no longer recover.
+- An actor-only Adam ε of 1e-3 removes that amplification. It prevented every collapse on 10 held-out seeds, though this was not formally decidable under the registered rule.
+
+So the same lesson covers both tasks: **when the reward carries no information, never succeeding or always succeeding, δ ≈ 0, and Adam turns noise into drift.**
+
 ## The algorithm
 
 Two separate networks, each with 2 hidden layers of 64 tanh units: the actor π_θ(a|s) (softmax) and the critic V_w(s). Both use Adam (actor lr 1e-3, critic 5e-3) and γ = 0.99. Both are updated **at every environment step**, with no replay buffer, batches, target network or clipping:
@@ -182,7 +189,10 @@ Hypotheses, predictions and decision rules are committed **before** the runs; re
   - Only potential shaping learns.
   - The bootstrap bug's exact TD fixed point (V = −66.9, δ ≈ +66 at the limit) shows up in the logs.
   - A time-left input alone is mostly ignored by the critic.
-- [03 · Is the CartPole collapse Adam amplifying a no-signal δ?](docs/experiments/03-cartpole-no-signal-at-success.md) (running)
+- [03 · Is the CartPole collapse Adam amplifying a no-signal δ?](docs/experiments/03-cartpole-no-signal-at-success.md), 10 held-out seeds:
+  - The collapse starts in a success streak where |δ| ≈ 0 and Adam's step is ≥ 10⁷× larger relative to the gradient than during learning.
+  - A larger Adam ε **for the actor only** (1e-3) prevented every collapse (0/8 vs 4/8, p = 0.038) and kept all learned runs solved.
+  - Formally not decidable: the control collapsed in 50% of its learned seeds, below the registered 60%.
 
 ## Project structure
 

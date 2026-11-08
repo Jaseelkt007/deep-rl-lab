@@ -118,6 +118,8 @@ Further observations:
 
 ### Support criteria (from the amendment)
 
+Computed by `support_03()` in `scripts/experiments.py`, printed as a separate block after the per-arm verdicts. The numbers below are copied from that output.
+
 1. **The pre-collapse window is a no-signal success streak. ✓ in 3 of the 4 control runs that collapse.**
    - Truncated share: 1.0, 0.28, 1.0, 1.0 (median 1.0).
    - Amplification vs the learning phase: 1.9e7×, 8.8e17×, 3.9e7×, 4.9e11× (all ≥ 10×).
