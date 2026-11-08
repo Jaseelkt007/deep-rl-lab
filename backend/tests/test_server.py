@@ -64,3 +64,18 @@ def test_websocket_streams_reset_status_and_steps(client):
         while time.time() - t0 < 5 and not {"reset", "status", "steps"} <= seen:
             seen.add(ws.receive_json()["type"])
     assert {"reset", "status", "steps"} <= seen
+
+
+def test_batch_runs_seeds_in_background(client):
+    cfg = {"env_id": "CartPole-v1", "num_episodes": 2, "snapshot_every": 100, "state_probe_every": 100}
+    r = client.post("/api/batch", json={"config": cfg, "seeds": [3, 4]}).json()
+    assert len(r["run_ids"]) == 2 and r["group"].startswith("batch-")
+    t0 = time.time()
+    while time.time() - t0 < 120:
+        runs = {m["run_id"]: m for m in client.get("/api/runs").json()}
+        if all(rid in runs and runs[rid]["summary"]["status"] == "finished" for rid in r["run_ids"]):
+            break
+        time.sleep(0.5)
+    assert all(runs[rid]["summary"]["status"] == "finished" for rid in r["run_ids"])
+    assert sorted(runs[rid]["seed"] for rid in r["run_ids"]) == [3, 4]
+    assert len({runs[rid]["config_key"] for rid in r["run_ids"]}) == 1  # same setup, different seeds
