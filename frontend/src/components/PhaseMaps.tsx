@@ -21,7 +21,7 @@ interface HeatProps {
 }
 
 /** A G×G map over two state dims, y (velocity) pointing up, with the trajectory on top. */
-function Heatmap({ nx, ny, values, color, xRange, yRange, traj, names, tip }: HeatProps) {
+export function Heatmap({ nx, ny, values, color, xRange, yRange, traj, names, tip }: HeatProps) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [hover, setHover] = useState<{ x: number; y: number; px: number; py: number; v: number | null } | null>(null);
 

@@ -25,6 +25,25 @@ A good first session:
 3. **MountainCar + reward shaping (energy).** The phase-plane maps show the spiral: push in the direction you are moving, swing higher, reach the flag.
 4. Then change **one switch at a time**. *Run 3 seeds in background* trains the current setup with 3 seeds; open the **Compare** page to overlay setups.
 
+## Start here: the Learn page
+
+**http://localhost:3000/learn** explains, step by step, how actor-critic is trained. It uses the textbook **batch on-policy** version with tiny networks (one hidden layer of 8 units), so every weight is visible. Pick CartPole or MountainCar at the top right.
+
+0. **The problem**: state, actions, reward, and how an episode ends (terminated vs truncated), side by side for both tasks.
+1. **The agent: two networks**: the actor (state → action probabilities: classifier-shaped, but with no labels) and the critic (state → V(s), a regression). Move the sliders to see a state flow through every weight.
+
+Then, for each iteration:
+
+1. **Collect a batch**: the frozen policy plays N complete episodes (animated).
+2. **Critic judges it**: V(s_t) for every state (random numbers at first).
+3. **Returns G**: computed backwards, G_t = r_t + γ·G_(t+1), starting from 0 after termination or V(s_T) after truncation.
+4. **Advantage A = G − V**: better (+) or worse (−) than the critic expected.
+5. **Critic step**: the loss, the gradient flowing back into each layer, Δw per weight (before / gradient / change / after), and the result.
+6. **Actor step**: the same for −A·log π(a|s): classification on its own actions, weighted by A.
+7. **Repeat**: throw the batch away (on-policy), and compare what both networks compute before and after the update.
+
+**+1 / +10 / +50 / +150** fast-forward to later iterations, with learning curves for the return, critic loss and critic quality. The backend code is `backend/rl/explain.py`.
+
 ## What to expect
 
 ### MountainCar-v0, plain: it does not learn, and that is correct behaviour
