@@ -50,6 +50,14 @@ class RunConfig(BaseModel):
     lr_schedule: Literal["constant", "linear", "cosine"] = "constant"  # over episodes
     # Sutton & Barto's I = γ^t factor on the actor step (see actor_critic.py). Off = common practice.
     actor_discount_I: bool = False
+    # adam: step size ~lr whatever the gradient size (Adam divides by a running gradient RMS).
+    # sgd:  step = lr · gradient, so δ ≈ 0 means no step (S&B's plain update). SGD needs
+    #       its own, much larger learning rates (roughly 10–100× the Adam ones).
+    optimizer: Literal["adam", "sgd"] = "adam"
+    # Multiply the training reward by k (after shaping). Scores always use the original reward.
+    reward_scale: float = Field(1.0, gt=0.0)
+    # Divide the critic's target by a running RMS of the targets (simplified PopArt).
+    value_norm: bool = False
 
     # --- RL formulation (defaults = plain) ---------------------------------
     # raw = unscaled state, scaled = [-1, 1] (the plain spec), rbf = Gaussian RBF grid.
@@ -95,6 +103,12 @@ class RunConfig(BaseModel):
             tags.append(f"lr {self.lr_schedule}")
         if self.actor_discount_I:
             tags.append("I-discount")
+        if self.optimizer != "adam":
+            tags.append(self.optimizer.upper())
+        if self.reward_scale != 1.0:
+            tags.append(f"r×{self.reward_scale:g}")
+        if self.value_norm:
+            tags.append("value-norm")
         if self.obs_mode != "scaled":
             tags.append(f"obs {self.obs_mode}")
         if self.time_input:

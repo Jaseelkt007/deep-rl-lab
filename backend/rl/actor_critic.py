@@ -30,7 +30,16 @@ Optional (all off by default):
   n-step:   G = r_t + γ r_{t+1} + … + γ^{n−1} r_{t+n−1} + γ^n V(s_{t+n}),   A = G − V(s_t)
   GAE(λ):   A = Σ_{k<n} (γλ)^k δ_{t+k}     (λ = 1: the n-step A above; n = 1: A = δ_t)
   entropy:  L_π −= β · H(π(·|s_t))   (pushes towards keeping all actions possible)
-  advantage normalisation, gradient clipping (separate or joint), LR schedules.
+  advantage normalisation, gradient clipping (separate or joint), LR schedules,
+  SGD instead of Adam, and value normalisation (below).
+
+Value normalisation (simplified PopArt, van Hasselt et al. 2016): the critic network
+outputs ṽ and V = σ·ṽ, where σ is a running RMS of the critic targets. The loss is
+½ (target/σ − ṽ)², so the network always regresses numbers of size ~1 instead of ~100
+(a return of 100 needs saturated tanh units or huge weights). Unlike real PopArt we do
+NOT rescale the output layer when σ changes, so V shifts a little each time σ moves.
+We use the RMS, not the std: without subtracting a mean, the std of targets near 100
+can be tiny, and dividing by it would blow the targets up.
 """
 
 from __future__ import annotations
@@ -69,6 +78,23 @@ def lr_factor(schedule: str, progress: float) -> float:
     return 1.0
 
 
+class RunningRMS:
+    """EMA of x² (bias-corrected); rms = sqrt of it. Scale for value normalisation."""
+
+    def __init__(self, beta: float = 0.999):
+        self.beta, self.k, self.s = beta, 0, 0.0
+
+    def update(self, x: float) -> None:
+        self.k += 1
+        self.s = self.beta * self.s + (1 - self.beta) * x * x
+
+    @property
+    def rms(self) -> float:
+        if self.k == 0:
+            return 1.0
+        return max(math.sqrt(self.s / (1.0 - self.beta**self.k)), 1e-3)
+
+
 class RunningNorm:
     """EMA estimate of mean and std (bias-corrected like Adam). Used for advantage normalisation:
     an online learner sees one advantage per update, so there is no batch to normalise over."""
@@ -104,10 +130,19 @@ class ActorCritic:
             net: [t for _, layer in model.linear_layers() for t in (layer.weight, layer.bias)]
             for net, model in (("actor", self.actor), ("critic", self.critic))
         }
-        # fused Adam: same algorithm, ~2x faster for many tiny steps on CPU
-        self.actor_opt = torch.optim.Adam(self.params["actor"], lr=cfg.actor_lr, fused=True)
-        self.critic_opt = torch.optim.Adam(self.params["critic"], lr=cfg.critic_lr, fused=True)
+        if cfg.optimizer == "sgd":
+            self.actor_opt = torch.optim.SGD(self.params["actor"], lr=cfg.actor_lr)
+            self.critic_opt = torch.optim.SGD(self.params["critic"], lr=cfg.critic_lr)
+        else:  # fused Adam: same algorithm, ~2x faster for many tiny steps on CPU
+            self.actor_opt = torch.optim.Adam(self.params["actor"], lr=cfg.actor_lr, fused=True)
+            self.critic_opt = torch.optim.Adam(self.params["critic"], lr=cfg.critic_lr, fused=True)
         self.adv_norm = RunningNorm() if cfg.adv_norm else None
+        self.vnorm = RunningRMS() if cfg.value_norm else None
+
+    @property
+    def v_scale(self) -> float:
+        """σ: V = σ · (critic network output). 1 unless value_norm is on."""
+        return self.vnorm.rms if self.vnorm else 1.0
 
     # ------------------------------------------------------------------ acting
     @torch.no_grad()
@@ -121,7 +156,7 @@ class ActorCritic:
     def evaluate(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Logits, probabilities and V for a batch of states (for maps and probes)."""
         logits = self.actor(x)
-        return logits, F.softmax(logits, dim=-1), self.critic(x)
+        return logits, F.softmax(logits, dim=-1), self.critic(x) * self.v_scale
 
     def set_lr_factor(self, f: float) -> tuple[float, float]:
         for g in self.actor_opt.param_groups:
@@ -146,9 +181,10 @@ class ActorCritic:
         m, gamma, lam = len(rewards), self.gamma, self.lam
 
         # --- critic values. Only V(s_t) gets a gradient; later V's are constants.
-        v = self.critic(xs[0:1]).squeeze(0)  # V_w(s_t), with grad
+        sigma = self.v_scale  # 1 unless value_norm
+        v_net = self.critic(xs[0:1]).squeeze(0)  # network output for s_t, with grad
         with torch.no_grad():
-            v_seq = self.critic(xs).tolist()  # V(s_t) … V(s_{t+m}) before this update
+            v_seq = (self.critic(xs) * sigma).tolist()  # V(s_t) … V(s_{t+m}) before this update
 
         # --- TD errors along the window:  δ_k = r_k + γ V(s_{k+1}) c_k − V(s_k)
         #     c_k = 1 inside the window; for the last one c = bootstrap (0 after termination).
@@ -161,7 +197,11 @@ class ActorCritic:
         target = v_seq[0] + adv_raw  # the critic's regression target (a constant)
 
         # --- critic loss  ½ (target − V(s_t))²   (= ½ δ² for the plain algorithm)
-        critic_loss = 0.5 * (target - v).pow(2)
+        #     with value_norm: ½ (target/σ − ṽ(s_t))², σ updated with this target first
+        if self.vnorm:
+            self.vnorm.update(target)
+            sigma = self.v_scale
+        critic_loss = 0.5 * (target / sigma - v_net).pow(2)
 
         # --- actor loss  −I · A · log π(a_t|s_t) − β H(π(·|s_t))     (I = 1 unless actor_discount_I)
         adv = self.adv_norm(adv_raw) if self.adv_norm else adv_raw
@@ -194,7 +234,7 @@ class ActorCritic:
         # --- the same state after the update: did the action become more likely?
         with torch.no_grad():
             log_probs_after = F.log_softmax(self.actor(xs[0:1]).squeeze(0), dim=-1)
-            v_after = float(self.critic(xs[0:1]))
+            v_after = float(self.critic(xs[0:1])) * sigma
             kl = float((probs * (log_probs - log_probs_after)).sum())  # KL(π_old ‖ π_new) at s_t
         p_old, p_new = probs.detach(), log_probs_after.exp()
 
@@ -208,7 +248,7 @@ class ActorCritic:
             "gn_actor": gn_a, "gn_critic": gn_c, "clip_actor": clip_a, "clip_critic": clip_c,
             "gn_actor_clipped": gn_a * clip_a, "gn_critic_clipped": gn_c * clip_c, "actor_weight": actor_weight,
             "critic_share": gn_c**2 / (gn_a**2 + gn_c**2 + 1e-12),
-            "dw_actor": dw_a, "dw_critic": dw_c,
+            "dw_actor": dw_a, "dw_critic": dw_c, "v_scale": sigma,
         }
         return {"stats": stats, "layer_grads": layer_grads, "layer_updates": layer_updates}
 

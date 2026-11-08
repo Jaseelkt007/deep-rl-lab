@@ -107,7 +107,8 @@ class Trainer:
         r_env = float(info.get("r_env", r_shaped))
         self.pending.append({
             "x": x, "s": self.obs, "t": self.t, "a": a, "p": probs.tolist(),
-            "r_env": r_env, "r_shaped": float(r_shaped), "s_next": obs2,
+            "r_env": r_env, "r_shaped": float(r_shaped), "r_train": float(r_shaped) * cfg.reward_scale,
+            "s_next": obs2,
         })
         self.ep_x.append(x)
         self._seen_since_probe.append((self.obs, self.t))
@@ -136,7 +137,7 @@ class Trainer:
     def _update_oldest(self, x_last: torch.Tensor, bootstrap: bool, terminated: bool, truncated: bool) -> None:
         """Update the oldest pending state with the window that follows it."""
         xs = torch.stack([p["x"] for p in self.pending] + [x_last])
-        rewards = [p["r_shaped"] for p in self.pending]  # the agent learns from the shaped reward
+        rewards = [p["r_train"] for p in self.pending]  # shaped and scaled: what the agent learns from
         tr = self.pending.popleft()
         is_last = not self.pending
         weight = self.cfg.gamma ** tr["t"] if self.cfg.actor_discount_I else 1.0
@@ -145,6 +146,7 @@ class Trainer:
         rec = {
             "type": "step", "ep": self.episode + 1, "t": tr["t"], "s": tr["s"].tolist(), "a": tr["a"],
             "a_env": self.amap[tr["a"]], "p": tr["p"], "r_env": tr["r_env"], "r_shaped": tr["r_shaped"],
+            "r_train": tr["r_train"],
             "s_next": tr["s_next"].tolist(), "window": len(rewards), "bootstrap": bootstrap,
             "term": terminated and is_last, "trunc": truncated and is_last, **out["stats"],
         }
@@ -167,10 +169,10 @@ class Trainer:
         ret = sum(s["r_env"] for s in steps)
 
         # Critic quality: V(s_t) vs the discounted return the critic is trained to predict
-        # (shaped reward if shaping is on). After truncation the tail is filled with V(s_T),
+        # (r_train: shaped and scaled if those switches are on). After truncation the tail is filled with V(s_T),
         # always, even with the bug switch on, so the bug shows up as a worse EV.
         tail = steps[-1]["v_next"] if truncated and not terminated else 0.0
-        g = discounted_returns([s["r_shaped"] for s in steps], cfg.gamma, tail)
+        g = discounted_returns([s["r_train"] for s in steps], cfg.gamma, tail)
         v = [s["v"] for s in steps]
 
         if cfg.env_id == "MountainCar-v0":
@@ -180,7 +182,8 @@ class Trainer:
 
         rec = {
             "type": "episode", "ep": self.episode, "return": ret,
-            "return_shaped": sum(s["r_shaped"] for s in steps), "length": n, "success": success,
+            "return_shaped": sum(s["r_shaped"] for s in steps), "return_train": sum(s["r_train"] for s in steps),
+            "length": n, "success": success,
             "terminated": bool(terminated), "truncated": bool(truncated),
             "mean_abs_delta": float(np.mean([abs(s["delta"]) for s in steps])),
             "adv_std": float(np.std([s["adv_raw"] for s in steps])),

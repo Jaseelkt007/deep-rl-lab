@@ -81,12 +81,12 @@ def test_td_target_at_the_real_time_limit_and_at_termination():
     mc = [r for r in collect(RunConfig(num_episodes=1, gamma=gamma)) if r["type"] == "step"]
     last = mc[-1]
     assert last["trunc"] and not last["term"] and len(mc) == 200
-    assert last["target"] == pytest.approx(last["r_shaped"] + gamma * last["v_next"], rel=1e-6)
+    assert last["target"] == pytest.approx(last["r_train"] + gamma * last["v_next"], rel=1e-6)
 
     cp = [r for r in collect(RunConfig(env_id="CartPole-v1", num_episodes=1)) if r["type"] == "step"]
     last = cp[-1]
     assert last["term"] and not last["trunc"]
-    assert last["target"] == pytest.approx(last["r_shaped"])
+    assert last["target"] == pytest.approx(last["r_train"])
 
 
 def _comparable(recs):
@@ -122,3 +122,12 @@ def test_record_types_and_snapshot_shapes():
     probe = next(r for r in recs if r["type"] == "probe")
     assert set(probe["returns"]) == {"policy", "greedy", "fixed", "fixed_greedy"}
     assert 0.0 <= probe["state_dependence"] <= 1.0
+
+
+def test_reward_scale_changes_training_reward_not_score():
+    recs = collect(RunConfig(num_episodes=1, reward_scale=0.01))
+    steps = [r for r in recs if r["type"] == "step"]
+    ep = next(r for r in recs if r["type"] == "episode")
+    assert all(s["r_train"] == pytest.approx(0.01 * s["r_env"]) for s in steps)
+    assert ep["return"] == -200 and ep["return_train"] == pytest.approx(-2.0)
+    assert steps[-1]["target"] == pytest.approx(steps[-1]["r_train"] + 0.99 * steps[-1]["v_next"], rel=1e-6)

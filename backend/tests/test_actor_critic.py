@@ -173,3 +173,31 @@ def test_clipped_norms_reported():
     s = make_agent(grad_clip="joint", grad_clip_norm=0.01).update(XS[:2], 0, [100.0], False)["stats"]
     total_after = (s["gn_actor_clipped"] ** 2 + s["gn_critic_clipped"] ** 2) ** 0.5
     assert total_after == pytest.approx(0.01, rel=1e-3)
+
+
+def test_sgd_step_is_lr_times_gradient():
+    agent = make_agent(optimizer="sgd", actor_lr=0.1, critic_lr=0.01)
+    s = agent.update(XS[:2], 0, [1.0], True)["stats"]
+    assert s["dw_actor"] == pytest.approx(0.1 * s["gn_actor"], rel=1e-4)
+    assert s["dw_critic"] == pytest.approx(0.01 * s["gn_critic"], rel=1e-4)
+
+
+def test_adam_step_size_does_not_shrink_with_the_gradient():
+    """The core of the CartPole collapse: Adam's first step is ~lr per weight even when δ is tiny."""
+    small, big = make_agent(), make_agent()
+    constant_critic(small, 0.0)
+    constant_critic(big, 0.0)
+    s_small = small.update(XS[:2], 0, [1e-6], False)["stats"]
+    s_big = big.update(XS[:2], 0, [1.0], False)["stats"]
+    assert s_small["gn_actor"] < 1e-5 * s_big["gn_actor"]  # gradient: a million times smaller
+    assert s_small["dw_actor"] > 0.3 * s_big["dw_actor"]  # step: same order of magnitude (ε damps a little)
+
+
+def test_value_norm_reports_values_in_raw_units():
+    agent = make_agent(value_norm=True)
+    for _ in range(300):
+        s = agent.update(XS[:2], 0, [100.0], False)["stats"]  # target is always 100
+    assert s["v_scale"] == pytest.approx(100.0, rel=0.05)  # RMS of the targets
+    _, _, v = agent.evaluate(XS[0:1])
+    assert float(v[0]) == pytest.approx(s["v_after"], rel=1e-5)
+    assert abs(s["v_after"] - 100.0) < abs(s["v"] - 100.0) + 1.0
