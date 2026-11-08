@@ -211,6 +211,12 @@ def test_actor_only_sgd_and_amplification_factor():
     assert s["amp_critic"] > 1.0  # Adam's first step: ~lr per weight, whatever the gradient size
 
 
+def test_actor_adam_eps_changes_the_actor_only():
+    agent = make_agent(actor_adam_eps=1e-3)
+    assert agent.actor_opt.param_groups[0]["eps"] == 1e-3
+    assert agent.critic_opt.param_groups[0]["eps"] == 1e-8
+
+
 def test_larger_adam_eps_damps_tiny_gradient_steps():
     small = {eps: make_agent(adam_eps=eps) for eps in (1e-8, 1e-3)}
     dw = {}

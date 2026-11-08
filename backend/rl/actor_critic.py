@@ -130,8 +130,9 @@ class ActorCritic:
             net: [t for _, layer in model.linear_layers() for t in (layer.weight, layer.bias)]
             for net, model in (("actor", self.actor), ("critic", self.critic))
         }
-        self.actor_opt = self._optimizer(cfg.actor_optimizer or cfg.optimizer, self.params["actor"], cfg.actor_lr)
-        self.critic_opt = self._optimizer(cfg.optimizer, self.params["critic"], cfg.critic_lr)
+        actor_eps = cfg.actor_adam_eps if cfg.actor_adam_eps is not None else cfg.adam_eps
+        self.actor_opt = self._optimizer(cfg.actor_optimizer or cfg.optimizer, self.params["actor"], cfg.actor_lr, actor_eps)
+        self.critic_opt = self._optimizer(cfg.optimizer, self.params["critic"], cfg.critic_lr, cfg.adam_eps)
         self.adv_norm = RunningNorm() if cfg.adv_norm else None
         self.vnorm = RunningRMS() if cfg.value_norm else None
 
@@ -150,11 +151,12 @@ class ActorCritic:
                 self.critic.out.bias.mul_(old / new)
         return new
 
-    def _optimizer(self, kind: str, params, lr: float) -> torch.optim.Optimizer:
+    @staticmethod
+    def _optimizer(kind: str, params, lr: float, eps: float) -> torch.optim.Optimizer:
         if kind == "sgd":
             return torch.optim.SGD(params, lr=lr)
         # fused Adam: same algorithm, ~2x faster for many tiny steps on CPU
-        return torch.optim.Adam(params, lr=lr, eps=self.cfg.adam_eps, fused=True)
+        return torch.optim.Adam(params, lr=lr, eps=eps, fused=True)
 
     @property
     def v_scale(self) -> float:

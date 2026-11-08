@@ -12,9 +12,9 @@ def test_every_switch_shows_up_in_label():
         entropy_beta=0.01, max_episode_steps=1000, shaping="energy", n_step=5, gae_lambda=0.9,
         grad_clip="joint", adv_norm=True, lr_schedule="cosine", actor_discount_I=True, obs_mode="raw", time_input=True,
         bootstrap_on_truncation=False, actions="no_noop", activation="relu", hidden_sizes=(32,),
-        actor_optimizer="sgd", adam_eps=1e-5,
+        actor_optimizer="sgd", adam_eps=1e-5, actor_adam_eps=1e-3,
     )
-    assert len(cfg.helpers()) == 17
+    assert len(cfg.helpers()) == 18
 
 
 def test_gae_lambda_ignored_for_one_step():

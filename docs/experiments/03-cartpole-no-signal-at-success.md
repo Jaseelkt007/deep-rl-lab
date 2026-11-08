@@ -72,6 +72,16 @@ New, for the hypothesis, over the 50 episodes before MA10 entropy first drops be
 
 If ε and actor SGD do **not** reduce the collapse, the leading alternative is that the policy *forgets* the failure states: once it is good, the online data contains only balanced states. That would need a different test (a small replay, or resets to failure states), which is outside 03.
 
+## Amendment 1 (after review, before any run of 03)
+
+1. **The ε arms are actor-only.** `adam_eps` changes both networks, and at success the critic's gradient is tiny too, so ε = 1e-3 would also freeze the critic. A fix could then not be traced to the actor. A new switch, `actor_adam_eps`, sets ε for the actor only. The arms are now **actor adam ε 1e-5** and **actor adam ε 1e-3**; the critic keeps ε = 1e-8. This also makes them comparable with the actor-only SGD arm.
+2. **The support criterion is relative to each run's own learning phase.** For Adam, ‖Δw‖/(lr·‖∇‖) ≈ 1/|typical gradient component|, which is already 10–100 during healthy learning, so "> 10" does not discriminate. Criterion 1 becomes:
+   - median truncated share ≥ 0.5 in the pre-collapse window, over the control runs that collapse;
+   - and median amplification in that window ≥ **10×** its median over episodes 50–100 (still learning);
+   - and median |δ| in that window ≤ **0.2×** its median over episodes 50–100.
+
+   `experiments.py` reports `amp_ratio` and `delta_ratio` per run.
+
 ## Results
 
 *(pending)*

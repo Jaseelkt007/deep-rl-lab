@@ -49,8 +49,9 @@ EXPERIMENTS: dict[str, dict] = {
         "seeds": list(range(10, 20)),  # held out
         "setups": {
             "control": {},
-            "adam eps 1e-5": {"adam_eps": 1e-5},
-            "adam eps 1e-3": {"adam_eps": 1e-3},
+            # actor only (amendment): adam_eps would also freeze the critic at success
+            "actor adam eps 1e-5": {"actor_adam_eps": 1e-5},
+            "actor adam eps 1e-3": {"actor_adam_eps": 1e-3},
             "actor sgd": {"actor_optimizer": "sgd", "actor_lr": None},  # LR filled in by the 03a amendment
             "actor lr x0.3": {"actor_lr": 1.5e-4},
             "entropy 0.01 + value_norm": {"entropy_beta": 0.01, "value_norm": True},
@@ -124,12 +125,17 @@ def cartpole_metrics(eps: list[dict]) -> dict:
     sat = ma(np.array([e["hidden"]["critic"][-1]["saturated"] for e in eps]), 10)
     sat_ep, ent_ep = first(sat > 0.9), first(ent < 0.1)
     window = eps[max(0, ent_ep - 51): ent_ep - 1] if ent_ep else []  # the pre-collapse window (03)
+    learning = eps[49:100]  # episodes 50-100: the policy is still improving (03 amendment)
     pre = {}
     if window:
+        amp_pre = float(np.median([e.get("mean_amp_actor", np.nan) for e in window]))
+        amp_learn = float(np.median([e.get("mean_amp_actor", np.nan) for e in learning]))
+        d_pre = float(np.median([e["mean_abs_delta"] for e in window]))
+        d_learn = float(np.median([e["mean_abs_delta"] for e in learning]))
         pre = {
             "pre_trunc_share": float(np.mean([e["truncated"] and not e["terminated"] for e in window])),
-            "pre_abs_delta": float(np.median([e["mean_abs_delta"] for e in window])),
-            "pre_amp_actor": float(np.median([e.get("mean_amp_actor", np.nan) for e in window])),
+            "pre_abs_delta": d_pre, "learn_abs_delta": d_learn, "delta_ratio": d_pre / (d_learn + 1e-12),
+            "pre_amp_actor": amp_pre, "learn_amp_actor": amp_learn, "amp_ratio": amp_pre / (amp_learn + 1e-12),
         }
     return {
         "learned": learned_ep is not None, "learned_ep": learned_ep,

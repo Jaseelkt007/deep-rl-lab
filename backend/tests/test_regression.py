@@ -13,7 +13,7 @@ GOLDEN = {
     "MountainCar-v0": "dad708c2f43e75058bb42126ac4a7318d7e06743605de0d988d1b7a6b185b69b",
     "CartPole-v1": "4bc71ee84317018a8e38ac0feda08cf4a843784b4b242d4f07699fa8b5dab5f3",
 }
-NEW_CONFIG_KEYS = {"adam_eps", "actor_optimizer", "value_norm_preserve"}
+NEW_CONFIG_KEYS = {"adam_eps", "actor_optimizer", "value_norm_preserve", "actor_adam_eps"}
 NEW_RECORD_KEYS = {"amp_actor", "amp_critic", "mean_amp_actor", "mean_amp_critic"}
 
 

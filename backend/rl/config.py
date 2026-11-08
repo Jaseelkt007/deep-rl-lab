@@ -59,6 +59,7 @@ class RunConfig(BaseModel):
     # Adam's ε: the step is lr·m/(√v + ε). With ε ≪ |gradient| (default 1e-8) even a tiny
     # gradient gives a step of ~lr; a larger ε damps steps whose gradients are below ~ε.
     adam_eps: float = Field(1e-8, gt=0.0)
+    actor_adam_eps: float | None = Field(None, gt=0.0)  # actor only; None = adam_eps
     # Multiply the training reward by k (after shaping). Scores always use the original reward.
     reward_scale: float = Field(1.0, gt=0.0)
     # Divide the critic's target by a running RMS of the targets (PopArt-style).
@@ -117,6 +118,8 @@ class RunConfig(BaseModel):
             tags.append(f"actor {self.actor_optimizer.upper()}")
         if self.adam_eps != 1e-8:
             tags.append(f"Adam ε={self.adam_eps:g}")
+        if self.actor_adam_eps is not None and self.actor_adam_eps != self.adam_eps:
+            tags.append(f"actor Adam ε={self.actor_adam_eps:g}")
         if self.reward_scale != 1.0:
             tags.append(f"r×{self.reward_scale:g}")
         if self.value_norm:
