@@ -176,3 +176,9 @@ Two things do not fit the pure story:
     | 03 control | 4.4e-3 | 8.8 |
 
     Left open.
+  - **Open question; post-hoc search stopped here.** Two mechanisms tested on the same runs is already the edge of fishing. What would actually answer it (future work, needs the user's go-ahead, not started):
+    - a **2×2 factorial** on new held-out seeds: entropy β ∈ {0, 0.01} × value_norm (output-preserving) ∈ {off, on};
+    - same check LRs, 10 seeds per cell, all four cells on the same seeds;
+    - it separates "output-preserving value_norm alone hurts learning" from "only the combination hurts".
+
+    Today we have 3 of the 4 cells, from different experiments and seed sets. 01's value_norm arm used no preserve, on seeds 10–14.
