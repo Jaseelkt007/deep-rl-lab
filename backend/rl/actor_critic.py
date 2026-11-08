@@ -20,6 +20,12 @@ truncated:  the time limit cut the episode off. s_{t+1} still has a future, so w
             bootstrap from V(s_{t+1}). Treating it as terminal is a common bug
             (switch: bootstrap_on_truncation=False).
 
+About I: S&B's boxed algorithm also scales the actor step by I = γ^t (t = time since the
+episode started, I ← γI): θ ← θ + α I δ ∇log π. It comes from the episodic objective
+J = V(s_0), which discounts what happens late in an episode. Almost every implementation
+drops it, and so does the plain setting here. With γ = 0.99 and 200 steps I falls to
+0.13, so late-episode states teach the actor much less. Switch: actor_discount_I.
+
 Optional (all off by default):
   n-step:   G = r_t + γ r_{t+1} + … + γ^{n−1} r_{t+n−1} + γ^n V(s_{t+n}),   A = G − V(s_t)
   GAE(λ):   A = Σ_{k<n} (γλ)^k δ_{t+k}     (λ = 1: the n-step A above; n = 1: A = δ_t)
@@ -116,13 +122,17 @@ class ActorCritic:
         return self.cfg.actor_lr * f, self.cfg.critic_lr * f
 
     # ----------------------------------------------------------------- learning
-    def update(self, xs: torch.Tensor, action: int, rewards: Sequence[float], bootstrap: bool) -> dict:
+    def update(
+        self, xs: torch.Tensor, action: int, rewards: Sequence[float], bootstrap: bool, actor_weight: float = 1.0
+    ) -> dict:
         """One actor and one critic step for the state s_t = xs[0].
 
         xs:        features of s_t, s_{t+1}, …, s_{t+m}   (m = len(rewards), m = 1 for plain)
-        rewards:   r_t, …, r_{t+m−1}
+        rewards:   r_t, …, r_{t+m−1}  (the rewards the agent learns from, i.e. shaped if shaping is on)
         bootstrap: whether s_{t+m} is non-terminal, i.e. V(s_{t+m}) is part of the target.
+        actor_weight: multiplies the policy-gradient term; I = γ^t with actor_discount_I, else 1.
         Returns a flat dict of numbers describing this update, plus per-layer stats.
+        Gradient norms gn_* are measured BEFORE clipping; gn_*_clipped after.
         """
         m, gamma, lam = len(rewards), self.gamma, self.lam
 
@@ -144,13 +154,13 @@ class ActorCritic:
         # --- critic loss  ½ (target − V(s_t))²   (= ½ δ² for the plain algorithm)
         critic_loss = 0.5 * (target - v).pow(2)
 
-        # --- actor loss  −A · log π(a_t|s_t) − β H(π(·|s_t))
+        # --- actor loss  −I · A · log π(a_t|s_t) − β H(π(·|s_t))     (I = 1 unless actor_discount_I)
         adv = self.adv_norm(adv_raw) if self.adv_norm else adv_raw
         logits = self.actor(xs[0:1]).squeeze(0)
         log_probs = F.log_softmax(logits, dim=-1)
         probs = log_probs.exp()
         entropy = -(probs * log_probs).sum()
-        actor_loss = -adv * log_probs[action] - self.cfg.entropy_beta * entropy
+        actor_loss = -actor_weight * adv * log_probs[action] - self.cfg.entropy_beta * entropy
 
         # --- gradients (two separate graphs, two separate optimisers)
         self.actor_opt.zero_grad(set_to_none=False)
@@ -194,6 +204,7 @@ class ActorCritic:
             "p_a": float(p_old[action]), "p_a_after": float(p_new[action]),
             "p_after": p_new.tolist(), "v_after": v_after, "kl": kl,
             "gn_actor": gn_a, "gn_critic": gn_c, "clip_actor": clip_a, "clip_critic": clip_c,
+            "gn_actor_clipped": gn_a * clip_a, "gn_critic_clipped": gn_c * clip_c, "actor_weight": actor_weight,
             "critic_share": gn_c**2 / (gn_a**2 + gn_c**2 + 1e-12),
             "dw_actor": dw_a, "dw_critic": dw_c,
         }

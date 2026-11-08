@@ -48,6 +48,8 @@ class RunConfig(BaseModel):
     # normalise every advantage to 0), so this uses running EMA mean/std instead.
     adv_norm: bool = False
     lr_schedule: Literal["constant", "linear", "cosine"] = "constant"  # over episodes
+    # Sutton & Barto's I = γ^t factor on the actor step (see actor_critic.py). Off = common practice.
+    actor_discount_I: bool = False
 
     # --- RL formulation (defaults = plain) ---------------------------------
     # raw = unscaled state, scaled = [-1, 1] (the plain spec), rbf = Gaussian RBF grid.
@@ -91,6 +93,8 @@ class RunConfig(BaseModel):
             tags.append("adv-norm")
         if self.lr_schedule != "constant":
             tags.append(f"lr {self.lr_schedule}")
+        if self.actor_discount_I:
+            tags.append("I-discount")
         if self.obs_mode != "scaled":
             tags.append(f"obs {self.obs_mode}")
         if self.time_input:

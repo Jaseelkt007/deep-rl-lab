@@ -157,3 +157,19 @@ def test_running_norm_standardises():
     vals = [norm(x) for x in [10.0, 12.0, 8.0, 11.0, 9.0] * 40]
     assert abs(sum(vals[-50:]) / 50) < 0.5
     assert all(abs(v) < 5 for v in vals[-50:])
+
+
+def test_actor_weight_scales_policy_gradient_term_only():
+    """S&B's I = γ^t factor: the actor term is scaled, the critic is untouched."""
+    full, half = make_agent(), make_agent()
+    sf = full.update(XS[:2], 1, [3.0], True)["stats"]
+    sh = half.update(XS[:2], 1, [3.0], True, actor_weight=0.5)["stats"]
+    assert sh["actor_loss"] == pytest.approx(0.5 * sf["actor_loss"])
+    assert sh["gn_actor"] == pytest.approx(0.5 * sf["gn_actor"], rel=1e-5)
+    assert sh["critic_loss"] == pytest.approx(sf["critic_loss"])
+
+
+def test_clipped_norms_reported():
+    s = make_agent(grad_clip="joint", grad_clip_norm=0.01).update(XS[:2], 0, [100.0], False)["stats"]
+    total_after = (s["gn_actor_clipped"] ** 2 + s["gn_critic_clipped"] ** 2) ** 0.5
+    assert total_after == pytest.approx(0.01, rel=1e-3)
