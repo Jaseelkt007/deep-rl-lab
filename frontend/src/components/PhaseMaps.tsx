@@ -128,6 +128,8 @@ function GradientLegend({ color, lo, hi, loLabel, hiLabel }: { color: Color; lo:
 
 export default function PhaseMaps({ snapshots, runStart, vStar }: { snapshots: SnapshotRec[]; runStart: RunStart | null; vStar: number | null }) {
   const [sel, setSel] = useState<number | null>(null); // null = follow the newest snapshot
+  // "run": one V colour scale over all snapshots, so scrubbing shows V change, not the scale
+  const [vScale, setVScale] = useState<"run" | "snapshot">("run");
   const n = snapshots.length;
   const idx = sel == null ? n - 1 : Math.min(sel, n - 1);
   const snap = idx >= 0 ? snapshots[idx] : null;
@@ -138,19 +140,37 @@ export default function PhaseMaps({ snapshots, runStart, vStar }: { snapshots: S
     [-0.07, 0.07],
   ];
 
+  const rewardScale = runStart?.config.reward_scale ?? 1;
+  const runRange = useMemo(() => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const s of snapshots) {
+      for (const v of s.value) {
+        lo = Math.min(lo, v);
+        hi = Math.max(hi, v);
+      }
+    }
+    return [lo, hi];
+  }, [snapshots, snapshots.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const maps = useMemo(() => {
     if (!snap) return null;
-    const vLo = Math.min(...snap.value);
-    const vHi = Math.max(...snap.value);
-    const flat = vHi - vLo < 1e-3;
-    const vColor: Color = (v) => rgbCss(seqOrange(flat ? 0.6 : (v - vLo) / (vHi - vLo)));
+    const sLo = Math.min(...snap.value);
+    const sHi = Math.max(...snap.value);
+    const meanV = snap.value.reduce((a, b) => a + b, 0) / snap.value.length;
+    // flat = spread below 1% of the value's size: -100.01 … -99.99 is NOT structure
+    const flat = sHi - sLo < 0.01 * Math.max(1, Math.abs(meanV));
+    const [vLo, vHi] = vScale === "run" ? runRange : [sLo, sHi];
+    const vColor: Color = (v) => rgbCss(seqOrange(flat && vScale === "snapshot" ? 0.6 : vHi - vLo < 1e-12 ? 0.6 : (v - vLo) / (vHi - vLo)));
     const ds = snap.delta_mean.filter((d): d is number => d != null).map(Math.abs).sort((a, b) => a - b);
-    const dMax = ds.length ? Math.max(ds[Math.floor(0.95 * (ds.length - 1))], 1e-9) : 1;
+    // floor tied to the reward scale, so δ ≈ 1e-5 noise renders as gray, not as vivid structure
+    const p95 = ds.length ? ds[Math.floor(0.95 * (ds.length - 1))] : 0;
+    const dMax = Math.max(p95, 0.05 * rewardScale);
     const dColor: Color = (v) => rgbCss(divDelta(0.5 + (0.5 * Math.max(-dMax, Math.min(dMax, v))) / dMax));
     const aColor: Color = (v) => ACTION_COLORS[actionNames[v]] ?? C.axis;
     const pColor: Color = (v) => rgbCss(divAction(v));
-    return { vLo, vHi, flat, vColor, dMax, dColor, aColor, pColor };
-  }, [snap, actionNames]);
+    return { vLo, vHi, sLo, sHi, flat, vColor, dMax, dColor, aColor, pColor };
+  }, [snap, actionNames, vScale, runRange, rewardScale]);
 
   if (!snap || !maps) return <div className="py-8 text-center text-[12px] text-neutral-400">The first map appears when training starts.</div>;
   const G = snap.grid;
@@ -179,7 +199,24 @@ export default function PhaseMaps({ snapshots, runStart, vStar }: { snapshots: S
           </ChartTitle>
           <Heatmap nx={G} ny={G} values={snap.value} color={maps.vColor} xRange={ranges[0]} yRange={ranges[1]} traj={snap.traj} names={names} tip={(v) => `V = ${fmt(v)}`} />
           <GradientLegend color={maps.vColor} lo={maps.vLo} hi={maps.vHi} />
-          {maps.flat && <div className="text-[10px] text-neutral-500">flat: all states ≈ {fmt(maps.vLo)}{vStar != null ? ` (V* = ${vStar.toFixed(0)})` : ""}</div>}
+          <div className="flex items-center gap-1 text-[10px] text-neutral-500">
+            colour scale:
+            {(["run", "snapshot"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setVScale(m)}
+                className={`rounded px-1 ${vScale === m ? "bg-neutral-200 text-neutral-800" : "hover:bg-neutral-100"}`}
+              >
+                {m === "run" ? "fixed over run" : "this snapshot"}
+              </button>
+            ))}
+          </div>
+          {maps.flat && (
+            <div className="text-[10px] text-neutral-500">
+              flat: all states ≈ {fmt((maps.sLo + maps.sHi) / 2)} (spread {fmt(maps.sHi - maps.sLo, 4)}){vStar != null ? `, V* = ${vStar.toFixed(0)}` : ""}
+            </div>
+          )}
         </div>
         <div>
           <ChartTitle help="The actor's most likely action in each state. The learned MountainCar policy pushes in the direction of the velocity (left when moving left, right when moving right): a split along velocity = 0.">
