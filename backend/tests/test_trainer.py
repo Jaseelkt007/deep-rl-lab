@@ -1,4 +1,5 @@
 import gymnasium as gym
+import torch
 import numpy as np
 import pytest
 
@@ -131,3 +132,17 @@ def test_reward_scale_changes_training_reward_not_score():
     assert all(s["r_train"] == pytest.approx(0.01 * s["r_env"]) for s in steps)
     assert ep["return"] == -200 and ep["return_train"] == pytest.approx(-2.0)
     assert steps[-1]["target"] == pytest.approx(steps[-1]["r_train"] + 0.99 * steps[-1]["v_next"], rel=1e-6)
+
+
+def test_logged_values_are_raw_units_with_value_norm():
+    """The UI compares V with V* = -r/(1-γ): logged V must be denormalised when value_norm is on."""
+    tr = Trainer(RunConfig(num_episodes=3, value_norm=True))
+    recs: list[dict] = []
+    tr.emit = recs.append
+    tr.run()
+    steps = [r for r in recs if r["type"] == "step"]
+    assert steps[-1]["v_scale"] > 1.0  # the critic network regresses target / σ ...
+    x = torch.as_tensor(tr.encoder(np.array([steps[-1]["s"]]), steps[-1]["t"]))
+    v_net = tr.agent.critic(x)[0].item()
+    assert float(tr.agent.evaluate(x)[2][0]) == pytest.approx(v_net * tr.agent.v_scale, rel=1e-5)  # ... V = σ·ṽ
+    assert abs(steps[-1]["v"]) > 5 * abs(v_net)  # logged V is in reward units, not network units

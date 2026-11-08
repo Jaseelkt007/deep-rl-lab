@@ -138,7 +138,7 @@ export default function Dashboard() {
             title="Learning curves"
             help="One point per episode (faint) and a 20-episode average (bold). Dashed vertical lines: CartPole, critic saturation > 90% and entropy < 0.1 (the collapse chain); MountainCar, 'no signal' = V reached −1/(1−γ) everywhere so δ ≈ 0; both, the first success."
           >
-            <Curves eps={view.episodes} snapshots={view.snapshots} cfg={rs?.config} />
+            <Curves eps={view.episodes} cfg={rs?.config} />
           </Panel>
         </main>
       </div>
