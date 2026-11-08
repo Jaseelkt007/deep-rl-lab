@@ -82,6 +82,21 @@ If ε and actor SGD do **not** reduce the collapse, the leading alternative is t
 
    `experiments.py` reports `amp_ratio` and `delta_ratio` per run.
 
+## Amendment 2: actor-SGD LR (selected on tuning seeds 0–2, before any held-out run)
+
+Grid run as `03a-select-actor-sgd-lr` (seeds 0–2, 1000 episodes; no run diverged):
+
+| actor SGD LR | learned (of 3) | collapsed | stays solved |
+|---|---|---|---|
+| 1e-3 | **3/3** (episodes 197, 197, 218) | 0/3 | 0.995, 1.0, 1.0 |
+| 3e-3 | 1/3 | 0/1 | 0, 0.01, 1.0 |
+| 1e-2 | 1/3 | 0/1 | 1.0, 0, 0 |
+| 3e-2 | 0/3 | – | 0, 0, 0 |
+
+The rule ("largest LR that diverges on no seed and learns on ≥ 2/3") selects **actor SGD lr = 1e-3**. Larger SGD LRs mostly fail to learn at all.
+
+On the tuning seeds, lr 1e-3 never collapsed. These are selection data, not the test; the predictions above are unchanged and the held-out seeds 10–19 decide.
+
 ## Results
 
 *(pending)*

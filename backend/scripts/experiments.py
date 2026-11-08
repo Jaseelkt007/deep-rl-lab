@@ -52,7 +52,7 @@ EXPERIMENTS: dict[str, dict] = {
             # actor only (amendment): adam_eps would also freeze the critic at success
             "actor adam eps 1e-5": {"actor_adam_eps": 1e-5},
             "actor adam eps 1e-3": {"actor_adam_eps": 1e-3},
-            "actor sgd": {"actor_optimizer": "sgd", "actor_lr": None},  # LR filled in by the 03a amendment
+            "actor sgd": {"actor_optimizer": "sgd", "actor_lr": 1e-3},  # selected on tuning seeds (03 amendment 2)
             "actor lr x0.3": {"actor_lr": 1.5e-4},
             "entropy 0.01 + value_norm": {"entropy_beta": 0.01, "value_norm": True},
         },
