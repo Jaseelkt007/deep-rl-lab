@@ -128,13 +128,12 @@ class Trainer:
                     self._update_oldest(x2, boot, terminated, truncated)
             elif len(self.pending) >= cfg.n_step:
                 self._update_oldest(x2, True, False, False)
+            self.obs = obs2
+            if terminated or truncated:
+                self._end_episode(terminated, truncated)
         except FloatingPointError as err:
             self._diverge(str(err))
             return False
-
-        self.obs = obs2
-        if terminated or truncated:
-            self._end_episode(terminated, truncated)
         return not self.finished
 
     def run(self) -> None:
@@ -246,6 +245,8 @@ class Trainer:
         xs = torch.stack(self.ep_x)
         _, h_actor = self.agent.actor(xs, return_hidden=True)
         _, h_critic = self.agent.critic(xs, return_hidden=True)
+        if not all(torch.isfinite(h).all() for h in h_actor + h_critic):
+            raise FloatingPointError("non-finite hidden activations")
         return {"actor": hidden_stats(h_actor, self.cfg.activation),
                 "critic": hidden_stats(h_critic, self.cfg.activation)}
 
