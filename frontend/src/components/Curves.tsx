@@ -3,18 +3,36 @@
 import { useMemo } from "react";
 import { C } from "@/lib/colors";
 import { firstCrossing, movingAverage } from "@/lib/math";
-import type { EpisodeRec } from "@/lib/types";
+import type { EpisodeRec, RunConfig, SnapshotRec } from "@/lib/types";
 import { ChartTitle } from "./Panel";
 import UChart, { Marker, SeriesSpec } from "./UChart";
 
 const MA = 20;
 const faint = (hex: string) => hex + "40";
 
-/** Where the causal chain of a collapse shows up on the episode axis. */
-export function collapseMarkers(eps: EpisodeRec[]): Marker[] {
+/** V* = r/(1−γ): the value of every state when the reward is a constant r per step forever
+ *  (MountainCar, never reaching the goal, bootstrapping at the time limit). null if not applicable. */
+export function noSignalValue(cfg: RunConfig | undefined): number | null {
+  if (!cfg || cfg.env_id !== "MountainCar-v0" || cfg.shaping !== "none" || !cfg.bootstrap_on_truncation || cfg.gamma >= 1) return null;
+  return -cfg.reward_scale / (1 - cfg.gamma);
+}
+
+/** Where the important events show up on the episode axis.
+ *  CartPole: critic saturation > 90% (the start of the collapse chain), entropy < 0.1.
+ *  MountainCar: "no signal" = on the states the episode visited, mean V within 1 of V* and
+ *  mean |δ| < 0.05 (the critic is RIGHT; the reward just carries no information). Both: first success. */
+export function collapseMarkers(eps: EpisodeRec[], _snapshots: SnapshotRec[] = [], cfg?: RunConfig): Marker[] {
   const out: Marker[] = [];
-  const sat = firstCrossing(eps, (e) => e.hidden?.critic.at(-1)?.saturated, (v) => v > 0.9);
-  if (sat != null) out.push({ x: sat, label: "critic sat > 90%", color: C.critic });
+  const vStar = noSignalValue(cfg);
+  if (cfg?.env_id === "MountainCar-v0") {
+    if (vStar != null) {
+      const e = eps.find((e) => Math.abs(e.mean_v - vStar) < 1 && e.mean_abs_delta < 0.05);
+      if (e) out.push({ x: e.ep, label: "no signal: V≈V*, δ≈0", color: C.ink2 });
+    }
+  } else {
+    const sat = firstCrossing(eps, (e) => e.hidden?.critic.at(-1)?.saturated, (v) => v > 0.9);
+    if (sat != null) out.push({ x: sat, label: "critic sat > 90%", color: C.critic });
+  }
   const ent = firstCrossing(eps, (e) => e.mean_entropy, (v) => v < 0.1);
   if (ent != null) out.push({ x: ent, label: "entropy < 0.1", color: C.actor });
   const succ = eps.find((e) => e.success);
@@ -141,8 +159,8 @@ export const CURVES: ChartDef[] = [
   },
 ];
 
-export default function Curves({ eps }: { eps: EpisodeRec[] }) {
-  const markers = useMemo(() => collapseMarkers(eps), [eps, eps.length]); // eslint-disable-line react-hooks/exhaustive-deps
+export default function Curves({ eps, snapshots, cfg }: { eps: EpisodeRec[]; snapshots: SnapshotRec[]; cfg?: RunConfig }) {
+  const markers = useMemo(() => collapseMarkers(eps, snapshots, cfg), [eps, eps.length, snapshots.length, cfg]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!eps.length) return <div className="py-8 text-center text-[12px] text-neutral-400">No episodes yet.</div>;
   return (
     <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-4">

@@ -6,11 +6,12 @@ import { C } from "@/lib/colors";
 import { connectLive, currentView, useStore } from "@/lib/store";
 import { fmt } from "@/lib/math";
 import Controls from "./Controls";
-import Curves from "./Curves";
+import Curves, { noSignalValue } from "./Curves";
 import EnvView from "./EnvView";
 import Panel from "./Panel";
 import { DeltaChart, StepNumbers, ValueVsReturn } from "./StepView";
 import UpdateView from "./UpdateView";
+import { LiveScrubber, ReplayBar, RunsList } from "./Replay";
 import { EvChart } from "./CriticView";
 
 const STATE_COLORS: Record<string, string> = {
@@ -88,9 +89,13 @@ export default function Dashboard() {
           <Panel title="Controls" help="Pick a task and switches, then Start. Every switch is off by default: that is the plain one-step actor-critic. Step does one environment step (and its update) while paused.">
             <Controls status={st.status} />
           </Panel>
+          <Panel title="Saved runs" help="Every run is saved in runs/<id>/ (config.json, metrics.jsonl, checkpoints). Click one to replay it without training again: curves, maps and every logged episode step by step.">
+            <RunsList />
+          </Panel>
         </aside>
 
         <main className="min-w-0 space-y-3">
+          <ReplayBar />
           {st.status?.error && (
             <pre className="overflow-auto rounded-md border border-red-200 bg-red-50 p-2 text-[11px] text-red-800">{st.status.error}</pre>
           )}
@@ -116,13 +121,14 @@ export default function Dashboard() {
                 <StepNumbers step={step} />
                 <DeltaChart steps={steps} cursor={idx} />
               </div>
+              <LiveScrubber />
             </Panel>
             <Panel
               title="Is the critic any good?"
               help="The actor can only be as good as its teacher. If the critic's V does not track the return, δ is noise and the actor learns noise."
             >
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <ValueVsReturn steps={finished} gamma={gamma} />
+                <ValueVsReturn steps={finished} gamma={gamma} vStar={noSignalValue(rs?.config)} />
                 <EvChart eps={view.episodes} />
               </div>
             </Panel>
@@ -130,9 +136,9 @@ export default function Dashboard() {
 
           <Panel
             title="Learning curves"
-            help="One point per episode (faint) and a 20-episode average (bold). Dashed vertical lines mark where the collapse chain shows up: critic saturation > 90%, entropy < 0.1, and the first success."
+            help="One point per episode (faint) and a 20-episode average (bold). Dashed vertical lines: CartPole, critic saturation > 90% and entropy < 0.1 (the collapse chain); MountainCar, 'no signal' = V reached −1/(1−γ) everywhere so δ ≈ 0; both, the first success."
           >
-            <Curves eps={view.episodes} />
+            <Curves eps={view.episodes} snapshots={view.snapshots} cfg={rs?.config} />
           </Panel>
         </main>
       </div>

@@ -70,16 +70,23 @@ export function DeltaChart({ steps, cursor }: { steps: StepRec[]; cursor: number
 }
 
 /** Critic quality on one finished episode: V(s_t) against the return that actually followed. */
-export function ValueVsReturn({ steps, gamma }: { steps: StepRec[]; gamma: number }) {
+export function ValueVsReturn({ steps, gamma, vStar }: { steps: StepRec[]; gamma: number; vStar: number | null }) {
   const { x, ys } = useMemo(() => {
     const g = discountedReturns(steps, gamma);
-    return { x: steps.map((s) => s.t), ys: [steps.map((s) => s.v), g] };
-  }, [steps, gamma]);
+    const ys: (number | null)[][] = [steps.map((s) => s.v), g];
+    if (vStar != null) ys.push(steps.map(() => vStar));
+    return { x: steps.map((s) => s.t), ys };
+  }, [steps, gamma, vStar]);
   return (
     <div>
       <ChartTitle help="Orange: what the critic predicted at each step. Black: the discounted return that actually followed, of the reward the critic trains on (after a time limit the unseen tail is filled with V(s_T)). If orange is flat while black moves, the critic is nearly constant and δ is mostly noise.">
         V(s) vs return that followed (last finished episode)
       </ChartTitle>
+      {vStar != null && (
+        <div className="mb-1 text-[10px] text-neutral-500">
+          Dotted: V* = {vStar.toFixed(0)}, the true value when the flag is never reached. A critic sitting there is right, and δ ≈ 0 gives the actor nothing.
+        </div>
+      )}
       <UChart
         x={x}
         ys={ys}
@@ -88,6 +95,7 @@ export function ValueVsReturn({ steps, gamma }: { steps: StepRec[]; gamma: numbe
         series={[
           { label: "V(s_t)", color: C.critic, width: 2 },
           { label: "return G_t", color: C.ink, width: 1.25 },
+          ...(vStar != null ? [{ label: `V* = −1/(1−γ) = ${vStar.toFixed(1)}`, color: C.muted, width: 1, dash: [2, 3] }] : []),
         ]}
       />
     </div>
