@@ -78,6 +78,25 @@ function EpisodeChart({ eps, def, markers }: { eps: EpisodeRec[]; def: ChartDef;
   );
 }
 
+/** One row above a chart grid that names the dashed marker lines (the charts draw lines only). */
+export function MarkerLegend({ markers }: { markers: Marker[] }) {
+  if (!markers.length) return null;
+  return (
+    <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-600">
+      {markers.map((m) => (
+        <span key={m.label} className="flex items-center gap-1.5">
+          <svg width="14" height="10">
+            <line x1="7" y1="0" x2="7" y2="10" stroke={m.color} strokeWidth="1.5" strokeDasharray="3 2" />
+          </svg>
+          {m.label} <span className="tabular-nums text-neutral-400">ep {m.x}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export const unlabelled = (ms: Marker[]) => ms.map((m) => ({ ...m, label: "" }));
+
 export const CURVES: ChartDef[] = [
   {
     title: "Return (original reward)",
@@ -164,12 +183,16 @@ export const CURVES: ChartDef[] = [
 
 export default function Curves({ eps, cfg }: { eps: EpisodeRec[]; cfg?: RunConfig }) {
   const markers = useMemo(() => collapseMarkers(eps, cfg), [eps, eps.length, cfg]); // eslint-disable-line react-hooks/exhaustive-deps
+  const lines = useMemo(() => unlabelled(markers), [markers]);
   if (!eps.length) return <div className="py-8 text-center text-[12px] text-neutral-400">No episodes yet.</div>;
   return (
-    <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-4">
-      {CURVES.map((def) => (
-        <EpisodeChart key={def.title} eps={eps} def={def} markers={markers} />
-      ))}
+    <div>
+      <MarkerLegend markers={markers} />
+      <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-4">
+        {CURVES.map((def) => (
+          <EpisodeChart key={def.title} eps={eps} def={def} markers={lines} />
+        ))}
+      </div>
     </div>
   );
 }

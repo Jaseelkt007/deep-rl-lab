@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { C } from "@/lib/colors";
 import type { EpisodeRec, ProbeRec, RunConfig } from "@/lib/types";
-import { collapseMarkers } from "./Curves";
+import { MarkerLegend, collapseMarkers, unlabelled } from "./Curves";
 import { ChartTitle } from "./Panel";
 import UChart, { Marker, SeriesSpec } from "./UChart";
 
@@ -112,11 +112,14 @@ function ProbeCharts({ probes, markers }: { probes: ProbeRec[]; markers: Marker[
 }
 
 export default function Diagnostics({ eps, probes, cfg }: { eps: EpisodeRec[]; probes: ProbeRec[]; cfg?: RunConfig }) {
-  const markers = useMemo(() => collapseMarkers(eps, cfg), [eps, eps.length, cfg]); // eslint-disable-line react-hooks/exhaustive-deps
+  const labelled = useMemo(() => collapseMarkers(eps, cfg), [eps, eps.length, cfg]); // eslint-disable-line react-hooks/exhaustive-deps
+  const markers = useMemo(() => unlabelled(labelled), [labelled]);
   if (!eps.length) return <div className="py-8 text-center text-[12px] text-neutral-400">No episodes yet.</div>;
   const relu = cfg?.activation === "relu";
   return (
-    <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-4">
+    <div>
+      <MarkerLegend markers={labelled} />
+      <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-4">
       <LayerChart
         eps={eps}
         title="Update / weight ratio per layer"
@@ -164,6 +167,7 @@ export default function Diagnostics({ eps, probes, cfg }: { eps: EpisodeRec[]; p
         markers={markers}
       />
       <ProbeCharts probes={probes} markers={markers} />
+      </div>
     </div>
   );
 }

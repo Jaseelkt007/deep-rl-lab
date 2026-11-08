@@ -11,7 +11,7 @@ import EnvView from "./EnvView";
 import Panel from "./Panel";
 import { DeltaChart, StepNumbers, ValueVsReturn } from "./StepView";
 import UpdateView from "./UpdateView";
-import { LiveScrubber, ReplayBar, RunsList } from "./Replay";
+import { LiveScrubber, ReplayBar, RunsList, openRun } from "./Replay";
 import PhaseMaps from "./PhaseMaps";
 import Diagnostics from "./Diagnostics";
 import { EvChart } from "./CriticView";
@@ -53,6 +53,12 @@ function StatusBar() {
 export default function Dashboard() {
   const st = useStore();
   useEffect(() => connectLive(), []);
+  // /?run=<id>[&ep=<n>] opens a saved run in replay (handy for links and screenshots)
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const id = q.get("run");
+    if (id) openRun(id, q.get("ep") ? Number(q.get("ep")) : undefined).catch(() => {});
+  }, []);
   const view = currentView();
   const rs = view.runStart;
   const envId = rs?.config.env_id ?? st.status?.env_id ?? "MountainCar-v0";
@@ -88,7 +94,7 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[270px_1fr]">
         <aside className="space-y-3 lg:sticky lg:top-12 lg:max-h-[calc(100vh-3.5rem)] lg:overflow-y-auto">
-          <Panel title="Controls" help="Pick a task and switches, then Start. Every switch is off by default: that is the plain one-step actor-critic. Step does one environment step (and its update) while paused.">
+          <Panel title="Controls · next run" help="Settings for the NEXT run (a replayed run shows its own settings in its label). Pick a task and switches, then Start. Every switch is off by default: that is the plain one-step actor-critic. Step does one environment step (and its update) while paused.">
             <Controls status={st.status} />
           </Panel>
           <Panel title="Saved runs" help="Every run is saved in runs/<id>/ (config.json, metrics.jsonl, checkpoints). Click one to replay it without training again: curves, maps and every logged episode step by step.">
