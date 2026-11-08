@@ -1,0 +1,33 @@
+[project]
+name = "rl-playground"
+version = "0.1.0"
+description = "Deep RL playground: plain actor-critic with live visualisation"
+requires-python = ">=3.11"
+dependencies = [
+    "gymnasium[classic-control]>=1.0",
+    "torch>=2.4",
+    "numpy>=1.26",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+# CPU-only torch wheels (avoids the multi-GB CUDA download).
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: long-running known-answer checks (deselect with -m 'not slow')"]
+addopts = "-m 'not slow'"
