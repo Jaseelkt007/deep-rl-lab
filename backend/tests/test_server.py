@@ -38,6 +38,7 @@ def test_live_run_finishes_and_can_be_reopened(client):
     assert len(steps) == detail["episodes"][1]["length"]
     lite = client.get(f"/api/runs/{run_id}?lite=true").json()
     assert "layers" not in lite["episodes"][0] and lite["snapshots"] == []
+    assert 0.0 <= lite["episodes"][0]["critic_sat"] <= 1.0
     assert client.get("/api/runs/../etc").status_code == 404
 
 

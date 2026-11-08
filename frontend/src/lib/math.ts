@@ -39,9 +39,9 @@ export function discountedReturns(steps: StepRec[], gamma: number): number[] {
 }
 
 /** First episode where a (smoothed) metric crosses a threshold. */
-export function firstCrossing(
-  eps: EpisodeRec[],
-  value: (e: EpisodeRec) => number | null | undefined,
+export function firstCrossing<E extends Pick<EpisodeRec, "ep">>(
+  eps: E[],
+  value: (e: E) => number | null | undefined,
   test: (v: number) => boolean,
   smooth = 10,
 ): number | null {
