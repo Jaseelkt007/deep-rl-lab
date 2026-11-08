@@ -36,7 +36,7 @@ Emit = Callable[[dict], None]
 EPISODE_MEANS = (
     "delta", "entropy", "actor_loss", "critic_loss", "gn_actor", "gn_critic", "gn_actor_clipped",
     "gn_critic_clipped", "critic_share", "clip_actor", "clip_critic", "dw_actor", "dw_critic", "kl", "p_a",
-    "adv_raw", "v",
+    "adv_raw", "v", "amp_actor", "amp_critic",
 )
 
 

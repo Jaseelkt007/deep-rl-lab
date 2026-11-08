@@ -201,3 +201,40 @@ def test_value_norm_reports_values_in_raw_units():
     _, _, v = agent.evaluate(XS[0:1])
     assert float(v[0]) == pytest.approx(s["v_after"], rel=1e-5)
     assert abs(s["v_after"] - 100.0) < abs(s["v"] - 100.0) + 1.0
+
+
+def test_actor_only_sgd_and_amplification_factor():
+    agent = make_agent(actor_optimizer="sgd", actor_lr=0.1)
+    assert isinstance(agent.actor_opt, torch.optim.SGD) and isinstance(agent.critic_opt, torch.optim.Adam)
+    s = agent.update(XS[:2], 0, [1.0], True)["stats"]
+    assert s["amp_actor"] == pytest.approx(1.0, rel=1e-4)  # SGD: ‖Δw‖ = lr·‖∇‖
+    assert s["amp_critic"] > 1.0  # Adam's first step: ~lr per weight, whatever the gradient size
+
+
+def test_larger_adam_eps_damps_tiny_gradient_steps():
+    small = {eps: make_agent(adam_eps=eps) for eps in (1e-8, 1e-3)}
+    dw = {}
+    for eps, agent in small.items():
+        constant_critic(agent, 0.0)
+        dw[eps] = agent.update(XS[:2], 0, [1e-6], False)["stats"]["dw_actor"]
+    assert dw[1e-3] < 0.01 * dw[1e-8]
+
+
+def test_value_norm_preserve_keeps_v_unchanged_when_sigma_moves():
+    agent = make_agent(value_norm=True)
+    for _ in range(20):
+        agent.update(XS[:2], 0, [1.0], False)  # σ settles near 1
+    before = agent.evaluate(XS)[2].clone()
+    sigma_old = agent.v_scale
+    agent.update_value_scale(500.0)  # a big target moves σ
+    assert agent.v_scale > 1.5 * sigma_old
+    torch.testing.assert_close(agent.evaluate(XS)[2], before, rtol=1e-5, atol=1e-5)
+
+
+def test_value_norm_without_preserve_lets_v_jump():
+    agent = make_agent(value_norm=True, value_norm_preserve=False)
+    for _ in range(20):
+        agent.update(XS[:2], 0, [1.0], False)
+    before = agent.evaluate(XS)[2].clone()
+    agent.update_value_scale(500.0)
+    assert not torch.allclose(agent.evaluate(XS)[2], before, rtol=1e-2)

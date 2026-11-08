@@ -248,12 +248,31 @@ export default function Controls({ status }: { status: Status | null }) {
             <option value="sgd">SGD</option>
           </select>
         </Row>
+        <Row label="actor optimizer" hint="Override the optimizer for the actor only">
+          <select
+            className={selectCls}
+            value={cfg.actor_optimizer ?? "same"}
+            onChange={(e) => set("actor_optimizer", e.target.value === "same" ? null : (e.target.value as "adam" | "sgd"))}
+          >
+            <option value="same">same</option>
+            <option value="adam">Adam</option>
+            <option value="sgd">SGD</option>
+          </select>
+        </Row>
+        <Row label="Adam ε" hint="Step = lr·m/(√v + ε). Larger ε damps steps on tiny gradients (default 1e-8)">
+          <NumberInput value={cfg.adam_eps} onChange={(v) => set("adam_eps", v && v > 0 ? v : 1e-8)} />
+        </Row>
         <Row label="I = γᵗ on actor" hint="Sutton & Barto's discount on the actor step">
           <Toggle on={cfg.actor_discount_I} onChange={(v) => set("actor_discount_I", v)} />
         </Row>
-        <Row label="value norm" hint="Critic regresses target / running RMS (simplified PopArt)">
+        <Row label="value norm" hint="Critic regresses target / running RMS (PopArt-style)">
           <Toggle on={cfg.value_norm} onChange={(v) => set("value_norm", v)} />
         </Row>
+        {cfg.value_norm && (
+          <Row label="preserve V when σ moves" hint="Rescale the output layer so V(s) does not jump (off = experiment 01's version)">
+            <Toggle on={cfg.value_norm_preserve} onChange={(v) => set("value_norm_preserve", v)} />
+          </Row>
+        )}
         <Row label="reward scale">
           <NumberInput value={cfg.reward_scale} onChange={(v) => set("reward_scale", v ?? 1)} />
         </Row>

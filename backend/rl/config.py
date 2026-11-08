@@ -54,10 +54,18 @@ class RunConfig(BaseModel):
     # sgd:  step = lr · gradient, so δ ≈ 0 means no step (S&B's plain update). SGD needs
     #       its own, much larger learning rates (roughly 10–100× the Adam ones).
     optimizer: Literal["adam", "sgd"] = "adam"
+    # Override the optimizer for the actor only (None = same as `optimizer`).
+    actor_optimizer: Literal["adam", "sgd"] | None = None
+    # Adam's ε: the step is lr·m/(√v + ε). With ε ≪ |gradient| (default 1e-8) even a tiny
+    # gradient gives a step of ~lr; a larger ε damps steps whose gradients are below ~ε.
+    adam_eps: float = Field(1e-8, gt=0.0)
     # Multiply the training reward by k (after shaping). Scores always use the original reward.
     reward_scale: float = Field(1.0, gt=0.0)
-    # Divide the critic's target by a running RMS of the targets (simplified PopArt).
+    # Divide the critic's target by a running RMS of the targets (PopArt-style).
     value_norm: bool = False
+    # ... and rescale the critic's output layer when σ changes, so V(s) does not jump.
+    # False = the earlier behaviour (used in experiment 01).
+    value_norm_preserve: bool = True
 
     # --- RL formulation (defaults = plain) ---------------------------------
     # raw = unscaled state, scaled = [-1, 1] (the plain spec), rbf = Gaussian RBF grid.
@@ -105,10 +113,14 @@ class RunConfig(BaseModel):
             tags.append("I-discount")
         if self.optimizer != "adam":
             tags.append(self.optimizer.upper())
+        if self.actor_optimizer is not None and self.actor_optimizer != self.optimizer:
+            tags.append(f"actor {self.actor_optimizer.upper()}")
+        if self.adam_eps != 1e-8:
+            tags.append(f"Adam ε={self.adam_eps:g}")
         if self.reward_scale != 1.0:
             tags.append(f"r×{self.reward_scale:g}")
         if self.value_norm:
-            tags.append("value-norm")
+            tags.append("value-norm" if self.value_norm_preserve else "value-norm (no preserve)")
         if self.obs_mode != "scaled":
             tags.append(f"obs {self.obs_mode}")
         if self.time_input:

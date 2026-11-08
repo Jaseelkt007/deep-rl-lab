@@ -33,11 +33,11 @@ Optional (all off by default):
   advantage normalisation, gradient clipping (separate or joint), LR schedules,
   SGD instead of Adam, and value normalisation (below).
 
-Value normalisation (simplified PopArt, van Hasselt et al. 2016): the critic network
-outputs ṽ and V = σ·ṽ, where σ is a running RMS of the critic targets. The loss is
-½ (target/σ − ṽ)², so the network always regresses numbers of size ~1 instead of ~100
-(a return of 100 needs saturated tanh units or huge weights). Unlike real PopArt we do
-NOT rescale the output layer when σ changes, so V shifts a little each time σ moves.
+Value normalisation (PopArt-style, van Hasselt et al. 2016): the critic network outputs ṽ
+and V = σ·ṽ, where σ is a running RMS of the critic targets. The loss is ½ (target/σ − ṽ)²,
+so the network always regresses numbers of size ~1 instead of ~100. By default the output
+layer is rescaled whenever σ changes, so V itself does not move (value_norm_preserve). With
+value_norm_preserve=False (what experiment 01 used) V jumps for every state when σ moves.
 We use the RMS, not the std: without subtracting a mean, the std of targets near 100
 can be tiny, and dividing by it would blow the targets up.
 """
@@ -130,14 +130,29 @@ class ActorCritic:
             net: [t for _, layer in model.linear_layers() for t in (layer.weight, layer.bias)]
             for net, model in (("actor", self.actor), ("critic", self.critic))
         }
-        if cfg.optimizer == "sgd":
-            self.actor_opt = torch.optim.SGD(self.params["actor"], lr=cfg.actor_lr)
-            self.critic_opt = torch.optim.SGD(self.params["critic"], lr=cfg.critic_lr)
-        else:  # fused Adam: same algorithm, ~2x faster for many tiny steps on CPU
-            self.actor_opt = torch.optim.Adam(self.params["actor"], lr=cfg.actor_lr, fused=True)
-            self.critic_opt = torch.optim.Adam(self.params["critic"], lr=cfg.critic_lr, fused=True)
+        self.actor_opt = self._optimizer(cfg.actor_optimizer or cfg.optimizer, self.params["actor"], cfg.actor_lr)
+        self.critic_opt = self._optimizer(cfg.optimizer, self.params["critic"], cfg.critic_lr)
         self.adv_norm = RunningNorm() if cfg.adv_norm else None
         self.vnorm = RunningRMS() if cfg.value_norm else None
+
+    def update_value_scale(self, target: float) -> float:
+        """Update σ with a new critic target. With value_norm_preserve (PopArt's "preserve outputs
+        precisely"), rescale the critic's output layer so V(s) = σ·ṽ(s) is unchanged for every s:
+        W ← W·σ_old/σ_new, b ← b·σ_old/σ_new. Without it, every V jumps whenever σ moves."""
+        old = self.v_scale
+        self.vnorm.update(target)
+        new = self.v_scale
+        if self.cfg.value_norm_preserve and new != old:
+            with torch.no_grad():
+                self.critic.out.weight.mul_(old / new)
+                self.critic.out.bias.mul_(old / new)
+        return new
+
+    def _optimizer(self, kind: str, params, lr: float) -> torch.optim.Optimizer:
+        if kind == "sgd":
+            return torch.optim.SGD(params, lr=lr)
+        # fused Adam: same algorithm, ~2x faster for many tiny steps on CPU
+        return torch.optim.Adam(params, lr=lr, eps=self.cfg.adam_eps, fused=True)
 
     @property
     def v_scale(self) -> float:
@@ -199,8 +214,9 @@ class ActorCritic:
         # --- critic loss  ½ (target − V(s_t))²   (= ½ δ² for the plain algorithm)
         #     with value_norm: ½ (target/σ − ṽ(s_t))², σ updated with this target first
         if self.vnorm:
-            self.vnorm.update(target)
-            sigma = self.v_scale
+            sigma = self.update_value_scale(target)
+            if self.cfg.value_norm_preserve:
+                v_net = self.critic(xs[0:1]).squeeze(0)  # recomputed with the rescaled output layer
         critic_loss = 0.5 * (target / sigma - v_net).pow(2)
 
         # --- actor loss  −I · A · log π(a_t|s_t) − β H(π(·|s_t))     (I = 1 unless actor_discount_I)
@@ -249,6 +265,10 @@ class ActorCritic:
             "gn_actor_clipped": gn_a * clip_a, "gn_critic_clipped": gn_c * clip_c, "actor_weight": actor_weight,
             "critic_share": gn_c**2 / (gn_a**2 + gn_c**2 + 1e-12),
             "dw_actor": dw_a, "dw_critic": dw_c, "v_scale": sigma,
+            # optimizer amplification ‖Δw‖ / (lr·‖∇‖): 1 for SGD; ≫ 1 when Adam turns a tiny
+            # gradient into a full-size step
+            "amp_actor": dw_a / (self.actor_opt.param_groups[0]["lr"] * gn_a * clip_a + 1e-30),
+            "amp_critic": dw_c / (self.critic_opt.param_groups[0]["lr"] * gn_c * clip_c + 1e-30),
         }
         return {"stats": stats, "layer_grads": layer_grads, "layer_updates": layer_updates}
 

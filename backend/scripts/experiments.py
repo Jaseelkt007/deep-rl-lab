@@ -30,7 +30,7 @@ EXPERIMENTS: dict[str, dict] = {
         "seeds": [10, 11, 12, 13, 14],  # held out: not used to choose the LRs
         "setups": {
             "control": {},
-            "value_norm": {"value_norm": True},
+            "value_norm": {"value_norm": True, "value_norm_preserve": False},  # as run (before the fix)
             "reward x0.01": {"reward_scale": 0.01},
             # SGD cannot use Adam's LRs (its step is lr·gradient): 20x the check LRs
             "sgd (lr x20)": {"optimizer": "sgd", "actor_lr": 1e-2, "critic_lr": 5e-2},

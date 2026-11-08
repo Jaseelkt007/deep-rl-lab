@@ -160,6 +160,15 @@ export const CURVES: ChartDef[] = [
     log: true,
   },
   {
+    title: "Optimizer amplification ‖Δw‖ / (lr·‖∇‖)",
+    help: "How much bigger the step is than plain SGD would make it (log). SGD = 1. Adam divides by a running gradient RMS, so when the gradient is tiny (δ ≈ 0) this ratio becomes huge: noise gets full-size steps. A larger Adam ε caps it.",
+    series: [
+      { label: "actor", color: C.actor, get: (e) => e.mean_amp_actor },
+      { label: "critic", color: C.critic, get: (e) => e.mean_amp_critic },
+    ],
+    log: true,
+  },
+  {
     title: "KL(π_old ‖ π_new) per update",
     help: "How much one update changed the policy at the updated state (log scale). PPO limits exactly this; plain actor-critic does not.",
     series: [{ label: "KL", color: C.actor, get: (e) => e.mean_kl }],

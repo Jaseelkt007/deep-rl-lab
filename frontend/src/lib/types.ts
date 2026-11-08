@@ -22,8 +22,11 @@ export interface RunConfig {
   lr_schedule: "constant" | "linear" | "cosine";
   actor_discount_I: boolean;
   optimizer: "adam" | "sgd";
+  actor_optimizer: "adam" | "sgd" | null;
+  adam_eps: number;
   reward_scale: number;
   value_norm: boolean;
+  value_norm_preserve: boolean;
   obs_mode: "raw" | "scaled" | "rbf";
   rbf_per_dim: number | null;
   time_input: boolean;
@@ -90,6 +93,8 @@ export interface StepRec {
   critic_share: number;
   dw_actor: number;
   dw_critic: number;
+  amp_actor: number;
+  amp_critic: number;
   actor_weight: number;
   v_scale: number;
 }
@@ -143,6 +148,8 @@ export interface EpisodeRec {
   mean_clip_critic: number;
   mean_dw_actor: number;
   mean_dw_critic: number;
+  mean_amp_actor?: number;
+  mean_amp_critic?: number;
   mean_kl: number;
   mean_p_a: number;
   mean_adv_raw: number;

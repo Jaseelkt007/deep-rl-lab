@@ -53,7 +53,7 @@ Lower learning rates **delay** the collapse; they do not fix it. The check (`scr
 
 ![CartPole curves](docs/img/cartpole-curves.png)
 
-The chain in a collapsing run:
+What a collapsing run shows, in order:
 1. The critic's last hidden layer saturates (more than 90% of tanh units beyond ±0.95), so V is flat and δ is mostly noise.
 2. Adam turns that noise into full-size steps.
 3. Entropy runs to 0 and π(a|s) to 1. At p ≈ 1, ∇log π ≈ 0, so the policy cannot recover.
@@ -96,7 +96,9 @@ Every switch is **off by default**, so the default run is the plain algorithm. A
 | | lr schedule: linear / cosine → 0 | | ‖Δw‖ and update/weight ratio shrinking |
 | | optimizer: SGD | step = lr·gradient, so δ ≈ 0 gives no step. Needs 10–100× larger LRs | ‖Δw‖ vs gradient norm |
 | | I = γᵗ on the actor | Sutton & Barto's discount on the actor step | late-episode learning |
-| | value norm | critic regresses target/σ, σ = running RMS of targets (simplified PopArt) | critic saturation |
+| | value norm | critic regresses target/σ, σ = running RMS of targets; the output layer is rescaled when σ moves, so V does not jump (PopArt-style) | critic saturation |
+| | Adam ε | step = lr·m/(√v + ε): a larger ε stops tiny gradients from getting full-size steps | optimizer amplification ‖Δw‖/(lr·‖∇‖) |
+| | actor optimizer | SGD or Adam for the actor only | amplification, entropy |
 | | reward scale | training reward ×k (scores unchanged) | critic saturation, V scale |
 | Formulation | observation: raw / scaled / RBF | raw inputs push tanh units into saturation | saturated units, effective rank |
 | | time-left input | makes the time limit Markov | V(s) vs return |
@@ -143,7 +145,7 @@ If values blow up (inf/NaN, e.g. SGD with too large a learning rate), the run is
 
 ```bash
 cd backend
-uv run pytest                                   # 55 tests, ~1.5 min
+uv run pytest                                   # 62 tests, ~1.5 min
 uv run python scripts/check_cartpole.py         # known-answer learning check (3 seeds, a few minutes)
 uv run python scripts/check_cartpole.py --full --seeds 10 11 12   # all 1000 episodes, held-out seeds
 ```
