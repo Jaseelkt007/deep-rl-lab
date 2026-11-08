@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import time
 from pathlib import Path
@@ -21,7 +22,13 @@ import torch
 from .config import RunConfig
 from .trainer import Trainer
 
-RUNS_DIR = Path(__file__).resolve().parents[2] / "runs"
+DEFAULT_RUNS_DIR = Path(__file__).resolve().parents[2] / "runs"
+
+
+def runs_dir() -> Path:
+    """Where runs live: $RL_RUNS_DIR if set (tests use a temp dir), else <project>/runs."""
+    return Path(os.environ.get("RL_RUNS_DIR", DEFAULT_RUNS_DIR))
+
 ENV_SHORT = {"MountainCar-v0": "mc", "CartPole-v1": "cp"}
 _STEP_PREFIX = re.compile(rb'^\{"type":"step","ep":(\d+),')
 
@@ -64,10 +71,10 @@ def make_run_id(cfg: RunConfig) -> str:
 class RunLogger:
     """Trainer callback that writes every record to disk."""
 
-    def __init__(self, cfg: RunConfig, run_id: str | None = None, root: Path = RUNS_DIR, group: str | None = None):
+    def __init__(self, cfg: RunConfig, run_id: str | None = None, root: Path | None = None, group: str | None = None):
         self.cfg = cfg
         self.run_id = run_id or make_run_id(cfg)
-        self.dir = root / self.run_id
+        self.dir = (root or runs_dir()) / self.run_id
         (self.dir / "checkpoints").mkdir(parents=True, exist_ok=True)
         self.meta = {
             "run_id": self.run_id, "label": cfg.label(), "helpers": cfg.helpers(), "env_id": cfg.env_id,
@@ -119,9 +126,9 @@ class RunLogger:
 # ----------------------------------------------------------------------------
 # Reading runs back
 # ----------------------------------------------------------------------------
-def list_runs(root: Path = RUNS_DIR) -> list[dict]:
+def list_runs(root: Path | None = None) -> list[dict]:
     out = []
-    for d in sorted(root.glob("*/config.json"), reverse=True):
+    for d in sorted((root or runs_dir()).glob("*/config.json"), reverse=True):
         try:
             meta = json.loads(d.read_text())
             s = d.parent / "summary.json"
@@ -198,10 +205,10 @@ class RunReader:
         }
 
 
-def run_to_disk(cfg_json: str, group: str | None = None, root: str | None = None) -> str:
+def run_to_disk(cfg_json: str, run_id: str | None = None, group: str | None = None, root: str | None = None) -> str:
     """Train one run headless and write it to runs/. Picklable entry point for process pools."""
     cfg = RunConfig.model_validate_json(cfg_json)
-    logger = RunLogger(cfg, root=Path(root) if root else RUNS_DIR, group=group)
+    logger = RunLogger(cfg, run_id=run_id, root=Path(root) if root else None, group=group)
     try:
         Trainer(cfg, emit=logger).run()
     finally:

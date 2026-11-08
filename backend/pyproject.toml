@@ -13,7 +13,10 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8",
+]
 
 # CPU-only torch wheels (avoids the multi-GB CUDA download).
 [tool.uv.sources]
@@ -32,3 +35,4 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = ["slow: long-running known-answer checks (deselect with -m 'not slow')"]
 addopts = "-m 'not slow'"
+filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient", "ignore:Using `httpx`"]
