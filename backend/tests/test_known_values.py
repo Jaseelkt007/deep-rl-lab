@@ -93,3 +93,18 @@ def test_bootstrap_at_truncation_learns_the_true_value_and_the_bug_does_not():
     v_bug = learned_values(bug, [np.array([-0.5, 0.0])])[0]
     assert v_good == pytest.approx(1 / (1 - GAMMA), rel=0.05)
     assert v_bug < 0.9 * v_good  # treating the time limit as terminal underestimates V
+
+
+def test_time_input_learns_the_exact_finite_horizon_value():
+    """With bootstrap off the loop really ends at T, and with the time-left input the problem is
+    Markov again: V(t) = (1 − γ^(T−t)) / (1 − γ), 8.78 at t = 0 down to 1.0 at t = T−1.
+    Checks the time-input path: s′ is encoded with t+1, and t = T is never bootstrapped from."""
+    T = 20
+    exact = np.array([(1 - GAMMA ** (T - t)) / (1 - GAMMA) for t in range(T)])
+    cfg = RunConfig(gamma=GAMMA, num_episodes=1000, max_episode_steps=T, time_input=True, bootstrap_on_truncation=False,
+                    optimizer="sgd", critic_lr=0.05, actor_lr=0.01,
+                    snapshot_every=10**6, state_probe_every=10**6, checkpoint_every=10**6)
+    tr = Trainer(cfg, env=LoopEnv(T))
+    tr.run()
+    x = torch.as_tensor(tr.encoder(np.tile([-0.5, 0.0], (T, 1)), np.arange(T)))
+    np.testing.assert_allclose(tr.agent.evaluate(x)[2].numpy(), exact, rtol=0.05)

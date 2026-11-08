@@ -44,7 +44,8 @@ What fixes it is a change to the *problem formulation*. [Experiment 02](docs/exp
 - **Potential-based shaping** (energy) is the only setup that learns: 5/5 seeds reach the flag, and 3/5 succeed in ≥ 88% of the last 100 episodes.
 - **n-step/GAE** and the **entropy bonus** stay at V = −100 and δ ≈ 0 (0/5): they cannot spread a reward that never arrives.
 - **The time-limit bug** produces exactly its computed artefact: V ≈ −67, δ ≈ −0.33 on ordinary steps and **+68 on the last step** of every episode.
-- **Plain** ends with a fully deterministic policy (entropy ≈ 1e-5) built from noise alone.
+- **Plain** ends with a fully deterministic policy (entropy ≈ 1e-5) built from noise alone. With the entropy bonus and the same δ ≈ 0, the policy stays exactly uniform (H = ln 3). That is the bonus at work: it is the only force left to oppose the Adam drift.
+- **Shaping only helps while the car moves.** One shaped seed settled at the bottom doing nothing, where Φ barely changes, so δ ≈ 0 again.
 
 ### CartPole-v1: learns, then collapses
 

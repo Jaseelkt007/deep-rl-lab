@@ -97,5 +97,13 @@ Computed by `uv run python scripts/experiments.py analyse 02-mountaincar-formula
 1. **No signal means no learning, however correct the critic is.** plain, n-step and entropy all sit at V = −100, δ ≈ 0. Multi-step returns cannot spread a reward that never arrives, and the entropy bonus can only make the random walk uniform.
 2. **With Adam, "no signal" does not mean "no change".** Plain MountainCar ends with a deterministic policy (entropy ≈ 1e-5) that was built entirely from noise. This is the same mechanism experiment 03 tests on CartPole, where success, not failure, removes the signal.
 3. **The time-limit bug is an artefact you can compute exactly.** V ≈ −67 and δ ≈ +68 on the last step of every episode, which the dashboard's δ chart shows as a spike at t = 199.
-4. **Giving the time to the critic is not enough by itself:** the critic often ignored the extra input. A Markov problem does not guarantee that a small network uses the input.
+4. **Giving the time to the critic did not produce V(t) in these runs. The cause is not established.**
+   - The code path is right: `test_time_input_learns_the_exact_finite_horizon_value` learns V(t) = (1 − γ^(T−t))/(1 − γ) within 5% on a deterministic loop (SGD; it gets 8.78 → 1.0 exactly in 1000 episodes).
+   - A post-hoc check of "plasticity loss" did not separate the seeds: the critic's last hidden layer was about 100% saturated from episode 1 in **all 5** seeds, both the two that ignored time (s11, s13) and the three that learned part of the slope. Early saturation is universal here, so it cannot explain the difference.
 5. **A formulation change (potential shaping) is what works.** It was the only setup that learned, on 3/5 seeds within 500 episodes. Even shaping is not robust with plain one-step actor-critic: one seed collapsed to a deterministic no-signal policy after its first success.
+6. **Shaping only helps while the car keeps moving** (post-hoc, last logged episode of the shaping seeds).
+   - s10 ended choosing "do nothing" on 200/200 steps, rocking near the bottom (x −0.62…−0.43, mean |v| 0.005).
+   - There Φ barely changes, so the shaping bonus is ≈ 0.0009 per step and |δ| ≈ 1e-4.
+   - It is the same no-signal trap again, now *with* shaping.
+   - The three seeds that learned push mostly right with some left, swing over −1.0…0.49 and reach the flag in ~120 steps with |δ| ≈ 1.
+7. **The entropy bonus opposes the Adam drift.** With δ ≈ 0 the entropy gradient is the only force left, so the policy stays exactly uniform (H = ln 3). Without it, plain drifts to entropy ≈ 1e-5. This fits experiment 01, where entropy was the only arm that let CartPole recover; whether that drift is the CartPole mechanism is what 03 tests.
