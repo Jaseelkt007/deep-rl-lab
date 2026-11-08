@@ -167,3 +167,12 @@ Two things do not fit the pure story:
     | 03 control | 0.40 | 0.55 | 0.01 | 0.73 | |
 
     The critic is *more* informative and δ is unbiased, yet the policy goes deterministic early without learning. The cause is open.
+  - **Post-hoc, second idea, also not supported.** The idea: a more informative critic gives consistent-sign advantages, so Adam's m/√v → 1 and the actor commits faster. The data show no larger or more consistent actor steps (episodes 1–300, median over seeds, actor lr 5e-4 in all three):
+
+    | Arm | ‖Δw‖ per update | ‖Δw‖/lr (max ≈ 68 if every m/√v = ±1) |
+    |---|---|---|
+    | entropy + value_norm | 3.3e-3 | 6.6 |
+    | 01's entropy-only | 3.5e-3 | 7.0 |
+    | 03 control | 4.4e-3 | 8.8 |
+
+    Left open.
