@@ -41,7 +41,8 @@ def main() -> None:
     overrides = {k: parse_value(v) for k, v in (kv.split("=", 1) for kv in args.set)}
     base = RunConfig(env_id=args.env, num_episodes=args.episodes, **overrides)
     group = args.group or f"batch-{time.strftime('%Y%m%d-%H%M%S')}"
-    cfgs = [base.model_copy(update={"seed": s}) for s in args.seeds]
+    # model_validate (not model_copy) so a bad --set value fails here, not deep in training
+    cfgs = [RunConfig.model_validate(base.model_dump() | {"seed": s}) for s in args.seeds]
     ids = [make_run_id(c) for c in cfgs]
     print(f"{base.env_id} [{base.label()}] seeds {args.seeds} -> group {group}")
     with ProcessPoolExecutor(max_workers=len(cfgs)) as pool:

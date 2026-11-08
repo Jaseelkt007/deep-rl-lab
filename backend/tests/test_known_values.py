@@ -25,6 +25,10 @@ class ChainEnv(gym.Env):
 
     @staticmethod
     def obs(k: int) -> np.ndarray:
+        """s0 … s4 inside the Box; the terminal state gets its own in-range observation
+        (its value is never used, since terminated means no bootstrap)."""
+        if k >= ChainEnv.N:
+            return np.array([0.6, 0.07])
         return np.array([-1.0 + 0.35 * k, 0.0])
 
     def reset(self, seed=None, options=None):

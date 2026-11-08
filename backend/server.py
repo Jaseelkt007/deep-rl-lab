@@ -312,7 +312,7 @@ def start_batch(req: BatchRequest) -> dict:
     group = f"batch-{time.strftime('%Y%m%d-%H%M%S')}"
     run_ids = []
     for seed in req.seeds:
-        cfg = req.config.model_copy(update={"seed": seed})
+        cfg = RunConfig.model_validate(req.config.model_dump() | {"seed": seed})
         run_id = make_run_id(cfg)
         fut: Future = pool.submit(run_to_disk, cfg.model_dump_json(), run_id, group)
         jobs[run_id] = {"group": group, "future": fut}
