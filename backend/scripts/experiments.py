@@ -172,20 +172,47 @@ def mountaincar_metrics(eps: list[dict], run_dir: Path) -> dict:
     }
 
 
-def verdict_01(rows: list[dict], control_rows: list[dict]) -> str:
-    """Decision rule from docs/experiments/01 (amendment): collapse counted among learned seeds."""
+# Decision rules exactly as registered in each experiment's doc.
+#   01 (5 seeds):  fix = collapsed <= 1 of learned AND median stays_solved >= 0.8 AND control collapsed >= 4;
+#                  inconclusive if < 3 learned.
+#   03 (10 seeds): fix = collapsed <= 20% of learned AND control collapsed >= 60% of its learned;
+#                  inconclusive if < 5 learned.
+# (arm condition, control precondition)
+RULES = {
+    "01-cartpole-collapse": (lambda col, n, stays: col <= 1 and stays >= 0.8, lambda c_col, c_n: c_col >= 4),
+    "03-cartpole-no-signal": (lambda col, n, stays: col <= 0.2 * n, lambda c_col, c_n: c_n > 0 and c_col >= 0.6 * c_n),
+}
+MIN_LEARNED = {"01-cartpole-collapse": 3, "03-cartpole-no-signal": 5}
+
+
+def fisher_one_sided(a_col: int, a_n: int, b_col: int, b_n: int) -> float:
+    """P(arm A has <= a_col collapses) under the hypergeometric null (A collapses less than B)."""
+    from math import comb
+    total, k = a_n + b_n, a_col + b_col
+    return sum(comb(a_n, i) * comb(b_n, k - i) for i in range(0, a_col + 1) if k - i <= b_n) / comb(total, k)
+
+
+def verdict_01(rows: list[dict], control_rows: list[dict], exp: str = "01-cartpole-collapse") -> str:
+    """Decision rule from the experiment's doc: collapse counted among learned seeds."""
     learned = [r for r in rows if r["learned"]]
     diverged = sum(1 for r in rows if r.get("diverged_at") is not None)
-    if len(learned) < 3:
+    if len(learned) < MIN_LEARNED.get(exp, 3):
         return (f"INCONCLUSIVE for collapse (learned on {len(learned)} seeds; diverged on {diverged}, "
                 f"never learned on {len(rows) - len(learned) - diverged})")
     collapsed = sum(r["collapsed"] for r in learned)
     stays = float(np.median([r["stays_solved"] for r in learned]))
     c_learned = [r for r in control_rows if r["learned"]]
     c_collapsed = sum(r["collapsed"] for r in c_learned)
-    if collapsed <= 1 and stays >= 0.8 and c_collapsed >= 4:
-        return f"FIXES (collapsed {collapsed}/{len(learned)}, median stays_solved {stays:.2f}; control {c_collapsed}/{len(c_learned)})"
-    return f"does not fix (collapsed {collapsed}/{len(learned)}, median stays_solved {stays:.2f}; control {c_collapsed}/{len(c_learned)})"
+    p = fisher_one_sided(collapsed, len(learned), c_collapsed, len(c_learned)) if c_learned else float("nan")
+    arm_rule, control_rule = RULES.get(exp, RULES["01-cartpole-collapse"])
+    tail = f"; one-sided Fisher vs control p = {p:.3f}"
+    arm_ok, control_ok = arm_rule(collapsed, len(learned), stays), control_rule(c_collapsed, len(c_learned))
+    if arm_ok and not control_ok:
+        return (f"NOT DECIDABLE: the arm meets the fix condition (collapsed {collapsed}/{len(learned)}, median "
+                f"stays_solved {stays:.2f}) but the control precondition fails (control {c_collapsed}/{len(c_learned)}){tail}")
+    if arm_ok and control_ok:
+        return f"FIXES (collapsed {collapsed}/{len(learned)}, median stays_solved {stays:.2f}; control {c_collapsed}/{len(c_learned)}{tail})"
+    return f"does not fix (collapsed {collapsed}/{len(learned)}, median stays_solved {stays:.2f}; control {c_collapsed}/{len(c_learned)}{tail})"
 
 
 def analyse(exp: str) -> dict:
@@ -218,7 +245,7 @@ def analyse(exp: str) -> dict:
             learned = [r for r in rows if r["learned"]]
             print(f"  -> learned {len(learned)}/{len(rows)}, collapsed {sum(r['collapsed'] for r in learned)}/{len(learned)}")
             if setup != "control":
-                print("  -> verdict: " + verdict_01(rows, out.get("control", [])))
+                print("  -> verdict: " + verdict_01(rows, out.get("control", []), exp))
         elif rows:
             print(f"  -> any success {sum(r['successes'] > 0 for r in rows)}/{len(rows)}, "
                   f"success last100 mean {np.mean([r['success_last100'] for r in rows]):.2f}")
