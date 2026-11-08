@@ -1,6 +1,6 @@
 # 03 · Is the CartPole collapse Adam amplifying a no-signal δ?
 
-**Status:** predictions written down before any run of this experiment (this commit).
+**Status:** done. Predictions f39ab08, amendments 80afb53 and cad7836 (all before the held-out runs); results below.
 
 ## Background (from 01)
 
@@ -99,4 +99,55 @@ On the tuning seeds, lr 1e-3 never collapsed. These are selection data, not the 
 
 ## Results
 
-*(pending)*
+Computed by `uv run python scripts/experiments.py analyse 03-cartpole-no-signal` (seeds 10–19, 1000 episodes).
+
+**Correction made before writing this section.** The first analysis printed "FIXES" for actor ε 1e-3. The verdict code was still applying 01's absolute rule (control collapsed ≥ 4) instead of 03's registered fractional rule. Fixed in `a423945`; the 01 verdicts are unchanged by the fix.
+
+| Arm | Learned | Collapsed (of learned) | Median stays solved (learned) | Fisher p vs control (one-sided) | Verdict (registered rule) |
+|---|---|---|---|---|---|
+| control | 8/10 | 4/8 (50%) | 0.30 | – | – |
+| actor adam ε 1e-5 | 8/10 | 3/8 | 0.99 | 0.50 | does not fix |
+| actor adam ε 1e-3 | 8/10 | **0/8** | **1.00** | **0.038** | **not decidable**: meets the fix condition, but the control precondition (≥ 60%) fails at 50% |
+| actor SGD (lr 1e-3) | 8/10 | 2/8 | 1.00 | 0.30 | does not fix (25% > 20%) |
+| actor lr ×0.3 | 10/10 | 7/10 | 0.36 | 0.91 | does not fix |
+| entropy 0.01 + value_norm | **1/10** | 0/1 | – | – | inconclusive (learned on 1 seed) |
+
+Further observations:
+- **actor ε 1e-3**: entropy never fell below 0.1 in any of its 8 learned runs.
+- **actor SGD**: of its two "collapses", s13 recovered (stays solved 1.0). The one lasting collapse (s12) happened with amplification ≈ 1 (plain SGD) and |δ| at 0.017 of its learning-phase value: that is not Adam amplification.
+
+### Support criteria (from the amendment)
+
+1. **The pre-collapse window is a no-signal success streak. ✓ in 3 of the 4 control runs that collapse.**
+   - Truncated share: 1.0, 0.28, 1.0, 1.0 (median 1.0).
+   - Amplification vs the learning phase: 1.9e7×, 8.8e17×, 3.9e7×, 4.9e11× (all ≥ 10×).
+   - |δ| vs the learning phase: 0.00095, 0.48, 0.00069, 0.00006 (median ≈ 0.0008 ≤ 0.2).
+   - The exception is s12: its collapse did not start inside a success streak (truncated share 0.28, δ ratio 0.48).
+   - The same window pattern also appears in the four control runs where entropy fell below 0.1 but the policy *stayed* good (s14–s17): a deterministic policy that balances is not a failure by itself.
+2. **adam ε 1e-3 or actor SGD fixes it. ✗ formally (not decidable).** The control collapsed in only 50% of its learned seeds, below the 60% the rule requires. Descriptively, ε 1e-3: 0/8 collapsed vs 4/8 (p = 0.038).
+3. **The collapse share falls monotonically: control ≥ ε 1e-5 ≥ ε 1e-3. ✓** 4/8 ≥ 3/8 ≥ 0/8.
+
+**Conclusion.** The hypothesis is **not formally confirmed**, because criterion 2 could not be decided under the rule as registered. The evidence points its way:
+- the collapse starts in a no-signal success streak where Adam's step is 10⁷× or more larger relative to the gradient than during learning;
+- actor ε 1e-3, which removes exactly that amplification and only for the actor, prevented every collapse and kept every learned run solved;
+- the collapse share falls with ε.
+
+Two things do not fit the pure story:
+- actor SGD still had one lasting collapse (with no amplification);
+- the control collapses less often than the earlier seeds suggested (50%, not "most").
+
+### Predicted vs observed
+
+| Arm | Predicted | Observed |
+|---|---|---|
+| control | 6–8/10 learn; **most** collapse; the window is a success streak with tiny \|δ\| and amplification ≫ 10 | 8/10 learn ✓; **only half (4/8) collapse** ✗; the window ✓ in 3/4 |
+| actor adam ε 1e-5 | fewer or later collapses than the control | 3/8 vs 4/8 ✓ (weak, p = 0.5) |
+| actor adam ε 1e-3 | fixes the collapse; learning may be a little slower | 0/8 collapse ✓ (not decidable by rule); **learning not slower** (first pass at episodes 140–308 vs 166–461) |
+| actor SGD | fixes the collapse, but learns more slowly | **2/8 collapse** (one recovered) ✗ by the 20% rule; median stays solved 1.0; learning speed similar |
+| actor lr ×0.3 | only delays the collapse | ✓ learns 10/10, then **7/10 collapse later** (episodes 301–955) |
+| entropy 0.01 + value_norm | like entropy alone in 01: returns dip but recover | **✗ it barely learns: 1/10 seeds reach MA > 400** (best MA 240–466). Cause not checked. |
+
+### Next
+
+- **03b (confirmatory):** control vs actor ε 1e-3 only, on 20 new held-out seeds (20–39), with the same rule, written down before running. With 20 seeds per arm the precondition question also gets a better estimate of the control's collapse rate.
+- Why entropy + value_norm (with the output-preserving fix) prevents learning: not explained yet.
