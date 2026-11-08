@@ -12,6 +12,7 @@ import Panel from "./Panel";
 import { DeltaChart, StepNumbers, ValueVsReturn } from "./StepView";
 import UpdateView from "./UpdateView";
 import { LiveScrubber, ReplayBar, RunsList } from "./Replay";
+import PhaseMaps from "./PhaseMaps";
 import { EvChart } from "./CriticView";
 
 const STATE_COLORS: Record<string, string> = {
@@ -139,6 +140,13 @@ export default function Dashboard() {
             help="One point per episode (faint) and a 20-episode average (bold). Dashed vertical lines: CartPole, critic saturation > 90% and entropy < 0.1 (the collapse chain); MountainCar, 'no signal' = V reached −1/(1−γ) everywhere so δ ≈ 0; both, the first success."
           >
             <Curves eps={view.episodes} cfg={rs?.config} />
+          </Panel>
+
+          <Panel
+            title="Phase plane: what each network has learned, state by state"
+            help="Maps over (position, velocity) for MountainCar, (pole angle, angular velocity) for CartPole, saved every K episodes. Drag the slider to watch them change during training. These are the key view: a successful MountainCar agent learns a spiral, swinging back and forth to build energy."
+          >
+            <PhaseMaps snapshots={view.snapshots} runStart={rs} vStar={noSignalValue(rs?.config)} />
           </Panel>
         </main>
       </div>
