@@ -7,7 +7,7 @@ import { C } from "@/lib/colors";
 import { firstCrossing, fmt, movingAverage } from "@/lib/math";
 import type { EpisodeRec, RunConfig, RunDetail, RunMeta } from "@/lib/types";
 import Panel, { ChartTitle } from "./Panel";
-import UChart, { SeriesSpec } from "./UChart";
+import UChart, { Marker, SeriesSpec } from "./UChart";
 
 type LiteEpisode = EpisodeRec & { critic_sat?: number; actor_sat?: number };
 
@@ -36,22 +36,44 @@ function setupColor(i: number) {
   return { color: C.groups[i % C.groups.length], dash: i >= C.groups.length ? [6, 3] : undefined };
 }
 
+/** Mean / min / max over seeds of each seed's moving average.
+ *  The mean is split in two: `full` while EVERY seed still has data, `partial` (drawn dotted)
+ *  once some seed has ended (diverged or shorter run), so the line never silently switches to
+ *  averaging only the survivors. */
 function aggregate(runs: LiteEpisode[][], get: (e: LiteEpisode) => number | null | undefined) {
   const curves = runs.map((eps) => movingAverage(eps.map((e) => get(e) ?? null), MA));
   const n = Math.max(0, ...curves.map((c) => c.length));
-  const mean: (number | null)[] = [];
+  const full: (number | null)[] = [];
+  const partial: (number | null)[] = [];
   const lo: (number | null)[] = [];
   const hi: (number | null)[] = [];
+  const count: number[] = [];
   for (let i = 0; i < n; i++) {
+    const alive = curves.filter((c) => i < c.length).length;
     const vs = curves.map((c) => c[i]).filter((v): v is number => v != null && Number.isFinite(v));
-    mean.push(vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null);
+    const mean = vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+    const all = alive === curves.length;
+    full.push(all ? mean : null);
+    // overlap one point so the dotted part joins the solid one
+    partial.push(!all || (i + 1 < n && curves.some((c) => i + 1 >= c.length)) ? mean : null);
     lo.push(vs.length ? Math.min(...vs) : null);
     hi.push(vs.length ? Math.max(...vs) : null);
+    count.push(alive);
   }
-  return { mean, lo, hi, n };
+  return { full, partial, lo, hi, n, count };
 }
 
-function CompareChart({ setups, data, metric }: { setups: Setup[]; data: Record<string, LiteEpisode[][]>; metric: (typeof METRICS)[number] }) {
+function CompareChart({
+  setups,
+  data,
+  metric,
+  markers,
+}: {
+  setups: Setup[];
+  data: Record<string, LiteEpisode[][]>;
+  metric: (typeof METRICS)[number];
+  markers: Marker[];
+}) {
   const { x, ys, specs, bands } = useMemo(() => {
     const ys: (number | null)[][] = [];
     const specs: SeriesSpec[] = [];
@@ -64,9 +86,12 @@ function CompareChart({ setups, data, metric }: { setups: Setup[]; data: Record<
       const pad = (arr: (number | null)[]) => [...arr, ...new Array(n - arr.length).fill(null)];
       const { color, dash } = setupColor(i);
       const base = ys.length;
-      ys.push(pad(a.hi), pad(a.lo), pad(a.mean));
+      const nSeeds = (data[s.key] ?? []).length;
+      const fewest = a.count.length ? Math.min(...a.count) : nSeeds;
+      ys.push(pad(a.hi), pad(a.lo), pad(a.full), pad(a.partial));
       specs.push({ label: `${s.label} max`, color, hidden: true }, { label: `${s.label} min`, color, hidden: true });
-      specs.push({ label: `${s.label} (${(data[s.key] ?? []).length} seeds)`, color, width: 2, dash });
+      specs.push({ label: `${s.label} (mean of ${nSeeds} seeds)`, color, width: 2, dash });
+      specs.push({ label: `${s.label} (fewer seeds, down to ${fewest})`, color, width: 1.5, dash: [1.5, 3], noLegend: fewest === nSeeds });
       bands.push({ hi: base, lo: base + 1, fill: color + "22" });
     });
     return { x: Array.from({ length: n }, (_, i) => i + 1), ys, specs, bands };
@@ -74,7 +99,7 @@ function CompareChart({ setups, data, metric }: { setups: Setup[]; data: Record<
   return (
     <div className="min-w-0">
       <ChartTitle help={metric.help}>{metric.title}</ChartTitle>
-      <UChart x={x} ys={ys} series={specs} bands={bands} yLog={metric.log} yRange={metric.range} sync="compare" height={170} />
+      <UChart x={x} ys={ys} series={specs} bands={bands} yLog={metric.log} yRange={metric.range} markers={markers} sync="compare" height={170} />
     </div>
   );
 }
@@ -123,6 +148,14 @@ export default function Compare() {
     for (const s of chosen) out[s.key] = s.runs.map((r) => details[r.run_id]?.episodes as LiteEpisode[] | undefined).filter((e): e is LiteEpisode[] => !!e && e.length > 0);
     return out;
   }, [chosen, details]);
+
+  // × where a run diverged (values became inf/NaN): its curve ends there
+  const divergedMarkers: Marker[] = chosen.flatMap((s, i) =>
+    s.runs.flatMap((r) => {
+      const d = details[r.run_id]?.diverged;
+      return d ? [{ x: d.ep, label: `× s${r.seed} diverged`, color: setupColor(i).color }] : [];
+    }),
+  );
 
   const toggle = (k: string) => setSelected((sel) => (sel.includes(k) ? sel.filter((x) => x !== k) : [...sel, k]));
 
@@ -219,7 +252,7 @@ export default function Compare() {
               <Panel title="Curves" help="Per seed: 20-episode moving average. Line: mean over seeds. Band: min to max over seeds. Few seeds = wide uncertainty: trust only clear, consistent separations.">
                 <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-4">
                   {METRICS.map((m) => (
-                    <CompareChart key={m.title} setups={chosen} data={data} metric={m} />
+                    <CompareChart key={m.title} setups={chosen} data={data} metric={m} markers={divergedMarkers} />
                   ))}
                 </div>
               </Panel>

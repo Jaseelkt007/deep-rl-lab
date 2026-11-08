@@ -219,5 +219,6 @@ export interface RunDetail {
   snapshots: SnapshotRec[];
   probes: ProbeRec[];
   finished: boolean;
+  diverged: { ep: number; reason: string } | null;
   episodes_with_steps: number[];
 }
