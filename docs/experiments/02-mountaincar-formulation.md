@@ -34,6 +34,32 @@ Plain actor-critic on MountainCar-v0 does not fail because of a bug or a broken 
 | n-step 10, GAE 0.95 | no help until the goal is reached once, then faster credit assignment; most likely no success within 500 episodes | multi-step returns propagate a signal that does not exist yet |
 | entropy 0.01 | more random wandering; maybe an occasional success by chance, but rarely enough to learn within 200 steps | exploration by noise is very unlikely to climb the hill |
 
+## Amendment (before the runs of this experiment started)
+
+The "bootstrap off (bug)" prediction above is wrong as written (pointed out in review). A
+time-blind critic cannot learn "−87 at the start, −1 near the limit": it sees roughly the
+same states at every t, so V ≈ a constant c. Its TD(0) fixed point can be computed exactly:
+
+- 199 ordinary steps: δ = −1 + γc − c = −1 − 0.01c. The fake-terminal step 200: δ = −1 − c.
+- Σδ = −200 − 2.99c = 0  ⇒  **c ≈ −66.9**
+- ⇒ δ ≈ **−0.33** on ordinary steps and δ ≈ **+65.9** on the last step of every episode.
+
+So the bug does not create noise. It gives a large positive advantage to whatever action
+happens at step 200, a systematic artefact. −66.9 is the TD fixed point, which is not the
+average Monte Carlo return (≈ −57.1). Under function approximation, TD and MC converge to
+different answers.
+
+Known answers to check (code: `scripts/experiments.py`, from the last logged episode):
+
+| Setup | Known answer |
+|---|---|
+| plain | V ≈ −100 for all t; δ ≈ 0 |
+| bootstrap off (bug) | V ≈ −66.9 for all t; δ ≈ −0.33 for t < 199; δ ≈ +65.9 at t = 199 |
+| time input + bootstrap off | V(t) = −(1 − 0.99^(200−t))/0.01: −86.6 at t = 0, −1.0 at t = 199 |
+
+Corrected prediction for "bootstrap off (bug)": no success. V converges near −66.9, with
+δ ≈ −0.33 everywhere except a large positive spike at the time limit.
+
 ## Results
 
 *(pending)*

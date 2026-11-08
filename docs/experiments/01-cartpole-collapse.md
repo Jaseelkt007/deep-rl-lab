@@ -17,7 +17,7 @@ Lower LRs only delay it. The seed-0 trace shows this order:
 
 ## Hypothesis: the scale of the value target
 
-CartPole returns grow from about 10 to about 100 (= 1/(1−γ)) as the agent improves. A tanh critic has to output 100, so it saturates its units, which leaves V flat across states. δ is then noise, and Adam turns that noise into full-size steps until the policy is deterministic.
+CartPole returns grow from about 10 to about 100 (= 1/(1−γ)) as the agent improves. The critic's output layer is linear, so outputting 100 does not by itself require saturated hidden units. But while V chases a large and fast-moving target, the hidden weights grow until the tanh units saturate. Then V is nearly flat across states, δ is noise, and Adam turns that noise into full-size steps until the policy is deterministic. The value_norm arm separates "large target" from "saturation".
 
 ## Design
 
@@ -53,6 +53,16 @@ If the hypothesis is right:
 | entropy 0.01 | **delays the policy collapse** without fixing the critic: entropy stays up, the critic still saturates, returns degrade but do not crash to 9 | treats the symptom (p → 1) |
 
 If value_norm and reward ×0.01 do **not** stop the collapse, the target-scale hypothesis is wrong, which is the more interesting outcome.
+
+## Amendment: decision rules (written after the runs started, before any result was seen)
+
+With 5 seeds, only a near-complete split means anything. One-sided Fisher exact test, collapsed vs not:
+5/5 vs 0/5 gives p ≈ 0.004; 5/5 vs 1/5 gives p ≈ 0.024; 4/5 vs 1/5 gives p ≈ 0.10, which is not significant.
+
+- Collapse is counted **among the learned seeds only**; the number of learned seeds is reported separately.
+- **fixes** = collapsed in ≤ 1 of its learned seeds **and** median stays_solved ≥ 0.8, **and** the control collapses in ≥ 4 of its learned seeds.
+- **inconclusive (for collapse)** = the setup learns on fewer than 3 seeds (a run that never learns cannot collapse). This may well apply to "sgd (lr ×20)".
+- Otherwise: **does not fix**.
 
 ## Results
 

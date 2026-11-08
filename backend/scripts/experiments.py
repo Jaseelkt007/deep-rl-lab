@@ -20,7 +20,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rl.config import RunConfig  # noqa: E402
-from rl.logger import make_run_id, run_to_disk, runs_dir  # noqa: E402
+from rl.logger import RunReader, make_run_id, run_to_disk, runs_dir  # noqa: E402
 
 CHECK_LRS = {"actor_lr": 5e-4, "critic_lr": 2.5e-3}  # from scripts/check_cartpole.py
 
@@ -109,9 +109,20 @@ def cartpole_metrics(eps: list[dict]) -> dict:
     }
 
 
-def mountaincar_metrics(eps: list[dict]) -> dict:
+def mountaincar_metrics(eps: list[dict], run_dir: Path) -> dict:
     succ = np.array([e["success"] for e in eps], dtype=float)
     v = np.array([e["mean_v"] for e in eps])
+    # Known answers (docs/experiments/02, amendment): checked on the last logged episode
+    reader = RunReader(run_dir)
+    last_ep = max(reader.step_ranges) if reader.step_ranges else None
+    steps = reader.steps(last_ep) if last_ep else []
+    full = len(steps) == 200 and not steps[-1]["term"]
+    known = {}
+    if full:
+        known = {
+            "V_t0": steps[0]["v"], "V_t199": steps[-1]["v"],
+            "delta_t<199": float(np.mean([s["delta"] for s in steps[:-1]])), "delta_t199": steps[-1]["delta"],
+        }
     return {
         "first_success": first(succ > 0), "successes": int(succ.sum()),
         "success_last100": float(succ[-100:].mean()),
@@ -119,12 +130,27 @@ def mountaincar_metrics(eps: list[dict]) -> dict:
         "mean_abs_delta_last100": float(np.mean([e["mean_abs_delta"] for e in eps[-100:]])),
         "mean_v_last100": float(v[-100:].mean()),
         "entropy_last100": float(np.mean([e["mean_entropy"] for e in eps[-100:]])),
+        **known,
     }
+
+
+def verdict_01(rows: list[dict], control_rows: list[dict]) -> str:
+    """Decision rule from docs/experiments/01 (amendment): collapse counted among learned seeds."""
+    learned = [r for r in rows if r["learned"]]
+    if len(learned) < 3:
+        return f"INCONCLUSIVE for collapse (learned on {len(learned)} seeds)"
+    collapsed = sum(r["collapsed"] for r in learned)
+    stays = float(np.median([r["stays_solved"] for r in learned]))
+    c_learned = [r for r in control_rows if r["learned"]]
+    c_collapsed = sum(r["collapsed"] for r in c_learned)
+    if collapsed <= 1 and stays >= 0.8 and c_collapsed >= 4:
+        return f"FIXES (collapsed {collapsed}/{len(learned)}, median stays_solved {stays:.2f}; control {c_collapsed}/{len(c_learned)})"
+    return f"does not fix (collapsed {collapsed}/{len(learned)}, median stays_solved {stays:.2f}; control {c_collapsed}/{len(c_learned)})"
 
 
 def analyse(exp: str) -> dict:
     spec = EXPERIMENTS[exp]
-    metric = cartpole_metrics if spec["base"]["env_id"] == "CartPole-v1" else mountaincar_metrics
+    cartpole = spec["base"]["env_id"] == "CartPole-v1"
     out: dict[str, list[dict]] = {}
     for cfg_path in sorted(runs_dir().glob("*/config.json")):
         meta = json.loads(cfg_path.read_text())
@@ -134,17 +160,18 @@ def analyse(exp: str) -> dict:
         eps = load_episodes(cfg_path.parent)
         if len(eps) < spec["base"]["num_episodes"]:
             continue  # unfinished
-        out.setdefault(group.split(": ", 1)[1], []).append({"seed": meta["seed"], **metric(eps)})
+        m = cartpole_metrics(eps) if cartpole else mountaincar_metrics(eps, cfg_path.parent)
+        out.setdefault(group.split(": ", 1)[1], []).append({"seed": meta["seed"], **m})
     for setup in spec["setups"]:
         rows = sorted(out.get(setup, []), key=lambda d: d["seed"])
         print(f"\n== {setup}  ({len(rows)} seeds)")
         for row in rows:
             print("  " + "  ".join(f"{k}={_fmt(v)}" for k, v in row.items()))
-        if rows and "learned" in rows[0]:
-            n = len(rows)
+        if rows and cartpole:
             learned = [r for r in rows if r["learned"]]
-            print(f"  -> learned {len(learned)}/{n}, collapsed {sum(r['collapsed'] for r in learned)}/{len(learned)}, "
-                  f"stays_solved mean {np.mean([r['stays_solved'] for r in rows]):.2f}")
+            print(f"  -> learned {len(learned)}/{len(rows)}, collapsed {sum(r['collapsed'] for r in learned)}/{len(learned)}")
+            if setup != "control":
+                print("  -> verdict: " + verdict_01(rows, out.get("control", [])))
         elif rows:
             print(f"  -> any success {sum(r['successes'] > 0 for r in rows)}/{len(rows)}, "
                   f"success last100 mean {np.mean([r['success_last100'] for r in rows]):.2f}")
