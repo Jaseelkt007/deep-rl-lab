@@ -79,3 +79,17 @@ def test_batch_runs_seeds_in_background(client):
     assert all(runs[rid]["summary"]["status"] == "finished" for rid in r["run_ids"])
     assert sorted(runs[rid]["seed"] for rid in r["run_ids"]) == [3, 4]
     assert len({runs[rid]["config_key"] for rid in r["run_ids"]}) == 1  # same setup, different seeds
+
+
+def test_learn_endpoints(client):
+    d = client.post("/api/learn/new", json={"env_id": "CartPole-v1", "seed": 1}).json()
+    sid = d["session"]
+    assert d["n_episodes"] == 5 and "W1" in d["weights"]["critic"]
+    t1 = client.post(f"/api/learn/{sid}/step").json()
+    assert t1["trace"]["k"] == 1 and len(t1["summaries"]) == 1
+    assert len(t1["trace"]["values"]) == len(t1["trace"]["returns"]) == t1["trace"]["summary"]["steps"]
+    t = client.post(f"/api/learn/{sid}/forward", json={"n": 3}).json()
+    assert t["trace"]["k"] == 4 and len(t["summaries"]) == 4
+    assert client.get(f"/api/learn/{sid}/trace/1").json()["trace"]["k"] == 1
+    assert client.get(f"/api/learn/{sid}/trace/2").status_code == 404  # fast-forwarded, not recorded
+    assert client.post("/api/learn/nope/step").status_code == 404

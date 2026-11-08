@@ -17,7 +17,8 @@ import re
 import threading
 import time
 import traceback
-from collections import deque
+import uuid
+from collections import OrderedDict, deque
 from concurrent.futures import Future, ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -27,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from rl.config import RunConfig
+from rl.explain import ExplainSession, LearnConfig
 from rl.logger import RunLogger, RunReader, clean, list_runs, make_run_id, run_to_disk, runs_dir
 from rl.trainer import Trainer
 
@@ -329,6 +331,58 @@ def start_batch(req: BatchRequest) -> dict:
         jobs[run_id] = {"group": group, "future": fut}
         run_ids.append(run_id)
     return {"group": group, "run_ids": run_ids}
+
+
+# ----------------------------------------------------------------------------
+# Learn page: batch actor-critic, one fully recorded iteration at a time
+# ----------------------------------------------------------------------------
+learn_sessions: OrderedDict[str, tuple[ExplainSession, threading.Lock]] = OrderedDict()
+LEARN_MAX_SESSIONS = 8
+
+
+class ForwardRequest(BaseModel):
+    n: int = Field(10, ge=1, le=300)
+
+
+def _learn(sid: str) -> tuple[ExplainSession, threading.Lock]:
+    if sid not in learn_sessions:
+        raise HTTPException(404, "unknown learn session (the server may have restarted): start a new one")
+    learn_sessions.move_to_end(sid)
+    return learn_sessions[sid]
+
+
+@app.post("/api/learn/new")
+def learn_new(cfg: LearnConfig) -> dict:
+    sid = uuid.uuid4().hex[:10]
+    session = ExplainSession(cfg)
+    learn_sessions[sid] = (session, threading.Lock())
+    while len(learn_sessions) > LEARN_MAX_SESSIONS:
+        learn_sessions.popitem(last=False)
+    return clean({"session": sid, **session.describe()})
+
+
+@app.post("/api/learn/{sid}/step")
+def learn_step(sid: str) -> dict:
+    session, lock = _learn(sid)
+    with lock:
+        trace = session.iterate()
+    return clean({"trace": trace, "summaries": session.summaries})
+
+
+@app.post("/api/learn/{sid}/forward")
+def learn_forward(sid: str, req: ForwardRequest) -> dict:
+    session, lock = _learn(sid)
+    with lock:
+        trace = session.forward(req.n)
+    return clean({"trace": trace, "summaries": session.summaries})
+
+
+@app.get("/api/learn/{sid}/trace/{k}")
+def learn_trace(sid: str, k: int) -> dict:
+    session, _ = _learn(sid)
+    if k not in session.traces:
+        raise HTTPException(404, f"iteration {k} was fast-forwarded and not recorded")
+    return clean({"trace": session.traces[k], "summaries": session.summaries})
 
 
 # ----------------------------------------------------------------------------
