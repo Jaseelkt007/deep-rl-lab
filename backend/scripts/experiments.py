@@ -37,6 +37,25 @@ EXPERIMENTS: dict[str, dict] = {
             "entropy 0.01": {"entropy_beta": 0.01},
         },
     },
+    # 03: actor-SGD LR selection on TUNING seeds 0-2 (run first; the rule is in the 03 doc)
+    "03a-select-actor-sgd-lr": {
+        "base": {"env_id": "CartPole-v1", "num_episodes": 1000, "log_steps_every": 100, **CHECK_LRS,
+                 "actor_optimizer": "sgd"},
+        "seeds": [0, 1, 2],
+        "setups": {f"actor sgd lr {lr:g}": {"actor_lr": lr} for lr in (1e-3, 3e-3, 1e-2, 3e-2)},
+    },
+    "03-cartpole-no-signal": {
+        "base": {"env_id": "CartPole-v1", "num_episodes": 1000, "log_steps_every": 100, **CHECK_LRS},
+        "seeds": list(range(10, 20)),  # held out
+        "setups": {
+            "control": {},
+            "adam eps 1e-5": {"adam_eps": 1e-5},
+            "adam eps 1e-3": {"adam_eps": 1e-3},
+            "actor sgd": {"actor_optimizer": "sgd", "actor_lr": None},  # LR filled in by the 03a amendment
+            "actor lr x0.3": {"actor_lr": 1.5e-4},
+            "entropy 0.01 + value_norm": {"entropy_beta": 0.01, "value_norm": True},
+        },
+    },
     "02-mountaincar-formulation": {
         "base": {"env_id": "MountainCar-v0", "num_episodes": 500, "log_steps_every": 25},
         "seeds": [10, 11, 12, 13, 14],
@@ -62,6 +81,8 @@ def run(exp: str, workers: int, only: list[str] | None = None) -> None:
     for setup, over in spec["setups"].items():
         if only and setup not in only:
             continue
+        if any(v is None for v in over.values()):
+            raise SystemExit(f"setup '{setup}' has an unset value (pending amendment): {over}")
         for seed in spec["seeds"]:
             cfg = RunConfig.model_validate({**spec["base"], **over, "seed": seed})
             jobs.append((cfg.model_dump_json(), make_run_id(cfg), group_name(exp, setup)))
@@ -102,12 +123,21 @@ def cartpole_metrics(eps: list[dict]) -> dict:
     ent = ma(np.array([e["mean_entropy"] for e in eps]), 10)
     sat = ma(np.array([e["hidden"]["critic"][-1]["saturated"] for e in eps]), 10)
     sat_ep, ent_ep = first(sat > 0.9), first(ent < 0.1)
+    window = eps[max(0, ent_ep - 51): ent_ep - 1] if ent_ep else []  # the pre-collapse window (03)
+    pre = {}
+    if window:
+        pre = {
+            "pre_trunc_share": float(np.mean([e["truncated"] and not e["terminated"] for e in window])),
+            "pre_abs_delta": float(np.median([e["mean_abs_delta"] for e in window])),
+            "pre_amp_actor": float(np.median([e.get("mean_amp_actor", np.nan) for e in window])),
+        }
     return {
         "learned": learned_ep is not None, "learned_ep": learned_ep,
         "collapsed": collapsed_ep is not None, "collapsed_ep": collapsed_ep,
         "stays_solved": float(np.mean(r[-200:] > 400)), "best_ma": float(np.nanmax(m)), "final_ma": float(m[-1]),
         "sat90_ep": sat_ep, "entropy01_ep": ent_ep,
         "gap": (ent_ep - sat_ep) if sat_ep is not None and ent_ep is not None else None,
+        **pre,
     }
 
 
