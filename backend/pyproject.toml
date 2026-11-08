@@ -29,5 +29,6 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = ["slow: long-running known-answer checks (deselect with -m 'not slow')"]
 addopts = "-m 'not slow'"
