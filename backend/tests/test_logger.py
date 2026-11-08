@@ -48,3 +48,19 @@ def test_reader_picks_up_appended_records(tmp_path):
     tr.run()
     reader.refresh()
     assert len(reader.episodes) == 2 and reader.finished
+
+
+def test_old_value_norm_runs_keep_their_no_preserve_label(tmp_path):
+    """Runs saved before value_norm_preserve existed had no preservation: label them so."""
+    cfg = RunConfig(value_norm=True, value_norm_preserve=False, num_episodes=1)
+    logger = RunLogger(cfg, root=tmp_path)
+    logger.close()
+    path = tmp_path / logger.run_id / "config.json"
+    meta = json.loads(path.read_text())
+    del meta["config"]["value_norm_preserve"]  # what an experiment-01 config.json looks like
+    meta["label"] = "value-norm"
+    path.write_text(json.dumps(meta))
+    assert "no preserve" in list_runs(tmp_path)[0]["label"]
+    reader = RunReader(tmp_path / logger.run_id)
+    assert "no preserve" in reader.meta["label"] and reader.meta["config"]["value_norm_preserve"] is False
+    assert json.loads(path.read_text())["label"] == "value-norm"  # the file itself is untouched

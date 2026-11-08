@@ -143,6 +143,8 @@ class ActorCritic:
         self.vnorm.update(target)
         new = self.v_scale
         if self.cfg.value_norm_preserve and new != old:
+            # Adam's m and v for this layer stay in the old units (real PopArt code usually
+            # ignores this too); the mismatch is small because σ moves slowly.
             with torch.no_grad():
                 self.critic.out.weight.mul_(old / new)
                 self.critic.out.bias.mul_(old / new)

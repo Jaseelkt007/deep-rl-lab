@@ -55,6 +55,25 @@ def dumps(rec: dict) -> str:
     return json.dumps(clean(rec), separators=(",", ":"), allow_nan=False)
 
 
+# Switches added after runs were saved, with the value that reproduces the OLD behaviour when
+# the key is missing from a saved config.json (their current defaults may differ).
+LEGACY_DEFAULTS = {"value_norm_preserve": False}
+
+
+def migrate_meta(meta: dict) -> dict:
+    """Read-time migration of a saved config.json: fill in missing switches with the value the
+    run actually used, and recompute label/helpers from that. The file itself is not changed."""
+    cfg = meta.get("config")
+    if not cfg:
+        return meta
+    missing = {k: v for k, v in LEGACY_DEFAULTS.items() if k not in cfg}
+    if missing:
+        cfg = {**cfg, **missing}
+        run_cfg = RunConfig.model_validate(cfg)
+        meta = {**meta, "config": run_cfg.model_dump(mode="json"), "label": run_cfg.label(), "helpers": run_cfg.helpers()}
+    return meta
+
+
 def config_key(cfg: RunConfig) -> str:
     """Hash of everything except the seed: runs with the same key are seeds of one setup."""
     d = cfg.model_dump(mode="json")
@@ -132,7 +151,7 @@ def list_runs(root: Path | None = None) -> list[dict]:
     out = []
     for d in sorted((root or runs_dir()).glob("*/config.json"), reverse=True):
         try:
-            meta = json.loads(d.read_text())
+            meta = migrate_meta(json.loads(d.read_text()))
             s = d.parent / "summary.json"
             meta["summary"] = json.loads(s.read_text()) if s.exists() else {"status": "running", "episodes": 0}
             meta.pop("config", None)
@@ -147,7 +166,7 @@ class RunReader:
 
     def __init__(self, run_dir: Path):
         self.dir = run_dir
-        self.meta = json.loads((run_dir / "config.json").read_text())
+        self.meta = migrate_meta(json.loads((run_dir / "config.json").read_text()))
         self.path = run_dir / "metrics.jsonl"
         self.offset = 0
         self.run_start: dict | None = None
