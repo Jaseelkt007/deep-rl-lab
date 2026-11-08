@@ -117,9 +117,9 @@ export default function UChart({ x, ys, series, height = 150, yLog, yRange, mark
             ctx.save();
             ctx.font = `${10 * devicePixelRatio}px sans-serif`;
             ctx.textBaseline = "top";
-            for (const m of ms) {
+            ms.forEach((m, k) => {
               const px = u.valToPos(m.x, "x", true);
-              if (px < u.bbox.left || px > u.bbox.left + u.bbox.width) continue;
+              if (px < u.bbox.left || px > u.bbox.left + u.bbox.width) return;
               ctx.strokeStyle = m.color;
               ctx.lineWidth = 1.5 * devicePixelRatio;
               ctx.setLineDash([4 * devicePixelRatio, 3 * devicePixelRatio]);
@@ -128,13 +128,15 @@ export default function UChart({ x, ys, series, height = 150, yLog, yRange, mark
               ctx.lineTo(px, top + h);
               ctx.stroke();
               if (m.label) {
+                // stack labels so nearby markers stay readable
+                const ly = top + (2 + 13 * k) * devicePixelRatio;
                 const tw = ctx.measureText(m.label).width;
-                ctx.fillStyle = "rgba(255,255,255,0.85)";
-                ctx.fillRect(px + 2 * devicePixelRatio, top + 1 * devicePixelRatio, tw + 4 * devicePixelRatio, 12 * devicePixelRatio);
+                ctx.fillStyle = "rgba(255,255,255,0.9)";
+                ctx.fillRect(px + 2 * devicePixelRatio, ly - devicePixelRatio, tw + 4 * devicePixelRatio, 12 * devicePixelRatio);
                 ctx.fillStyle = m.color;
-                ctx.fillText(m.label, px + 4 * devicePixelRatio, top + 2 * devicePixelRatio);
+                ctx.fillText(m.label, px + 4 * devicePixelRatio, ly);
               }
-            }
+            });
             ctx.restore();
           },
         ],

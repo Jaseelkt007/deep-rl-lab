@@ -13,6 +13,7 @@ import { DeltaChart, StepNumbers, ValueVsReturn } from "./StepView";
 import UpdateView from "./UpdateView";
 import { LiveScrubber, ReplayBar, RunsList } from "./Replay";
 import PhaseMaps from "./PhaseMaps";
+import Diagnostics from "./Diagnostics";
 import { EvChart } from "./CriticView";
 
 const STATE_COLORS: Record<string, string> = {
@@ -147,6 +148,13 @@ export default function Dashboard() {
             help="Maps over (position, velocity) for MountainCar, (pole angle, angular velocity) for CartPole, saved every K episodes. Drag the slider to watch them change during training. These are the key view: a successful MountainCar agent learns a spiral, swinging back and forth to build energy."
           >
             <PhaseMaps snapshots={view.snapshots} runStart={rs} vStar={noSignalValue(rs?.config)} />
+          </Panel>
+
+          <Panel
+            title="Inside the networks"
+            help="The same diagnostics we use on large agents: which layers still learn, whether hidden units are saturated or constant, whether the representation still tells states apart, and whether the actor uses the state at all."
+          >
+            <Diagnostics eps={view.episodes} probes={view.probes} cfg={rs?.config} />
           </Panel>
         </main>
       </div>
