@@ -30,6 +30,10 @@ Useful options: `--iters 300`, `--batch 10`, `--actor-lr 0.005`, `--critic-lr 0.
 
 - **Run** (`/`): the latest terminal run.
   - The algorithm, status and settings, and a button that copies the train command.
+  - **Scorecard**, for comparing policies beyond the 500 cap:
+    - **speed**: environment steps until the policy first scores 500;
+    - **stability**: does it stay at 500 afterwards;
+    - **quality**: the final policy tested for up to 10,000 steps from 20 starts, with survival, centering, calmness and action switching, next to the hand-written good policy.
   - Recorded episodes: the policy every 10 iterations, the final one, and a hand-written good policy, replayed with the state values.
   - The environment and the update rule at a glance.
   - Four charts:
