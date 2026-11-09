@@ -617,13 +617,23 @@ function UpdatePanel({ c }: { c: AlgoConfig }) {
           </>
         ) : (
           <>
-            <Mono>δ = r + γV(s′) − V(s) · A = Σ (γλ)ᵏ δ</Mono>
+            <Mono>δ = r + γV(s′) − V(s)</Mono>
+            <br />
+            <Mono>A = Σ (γλ)ᵏ δ</Mono>
             <div className="text-[11px] text-neutral-500">λ = {lam}: between one-step TD (λ = 0) and G − V (λ = 1)</div>
           </>
         )}
       </Kv>
       <Kv k="critic">
-        {lam === 1 ? <Mono>L_V = ½(G − V)²</Mono> : <Mono>target = A + V_old(s) · L_V = ½(target − V)²</Mono>}
+        {lam === 1 ? (
+          <Mono>L_V = ½(G − V)²</Mono>
+        ) : (
+          <>
+            <Mono>target = A + V_old(s)</Mono>
+            <br />
+            <Mono>L_V = ½(target − V)²</Mono>
+          </>
+        )}
       </Kv>
       <Kv k="actor">
         {c.clip ? (
@@ -631,7 +641,10 @@ function UpdatePanel({ c }: { c: AlgoConfig }) {
             <Mono>r = π(a|s) / π_old(a|s)</Mono>
             <br />
             <Mono>
-              L_π = −min(r·A, clip(r, {1 - c.clip}, {1 + c.clip})·A)
+              L_π = −min(r·A, clip(r,{" "}
+              <span className="whitespace-nowrap">
+                {1 - c.clip}, {1 + c.clip})·A)
+              </span>
             </Mono>
           </>
         ) : (
@@ -704,7 +717,7 @@ function AlgoDetail({ data }: { data: RunData }) {
   const rows = data.rows;
   return (
     <>
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_340px]">
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_380px]">
         <Panel
           title="Recorded episodes"
           help="The policy at iteration 1, every 10 iterations and at the end, always from the same start state and always taking its most likely action. 'good policy' = the hand-written rule on the same start."
