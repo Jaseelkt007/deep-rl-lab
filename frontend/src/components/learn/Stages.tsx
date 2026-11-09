@@ -7,7 +7,7 @@ import type { Describe, Maps, NetWeights, Trace } from "@/lib/learn";
 import { forward, maxAbs, softmax } from "@/lib/learn";
 import type { StepRec } from "@/lib/types";
 import EnvView from "../EnvView";
-import { Heatmap } from "../PhaseMaps";
+import { Heatmap } from "../Heatmap";
 import BarStrip from "./BarStrip";
 import NetDiagram, { EdgeMode, MatrixGrid } from "./NetDiagram";
 

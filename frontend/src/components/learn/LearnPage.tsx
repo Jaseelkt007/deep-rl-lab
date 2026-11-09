@@ -172,21 +172,10 @@ export default function LearnPage() {
   return (
     <div className="min-h-screen bg-[#fafaf9]">
       <header className="sticky top-0 z-20 flex items-center gap-4 border-b border-neutral-200 bg-white/90 px-4 py-2 backdrop-blur">
-        <h1 className="text-[14px] font-semibold text-neutral-900">RL playground</h1>
-        <nav className="flex gap-3 text-[12px]">
-          <Link href="/learn" className="font-medium text-neutral-900">
-            Learn
-          </Link>
-          <Link href="/terminal" className="text-neutral-500 hover:text-neutral-900">
-            Terminal run
-          </Link>
-          <Link href="/" className="text-neutral-500 hover:text-neutral-900">
-            Live
-          </Link>
-          <Link href="/compare" className="text-neutral-500 hover:text-neutral-900">
-            Compare
-          </Link>
-        </nav>
+        <h1 className="text-[14px] font-semibold text-neutral-900">One update, step by step</h1>
+        <Link href="/" className="text-[12px] text-[#2a78d6] hover:underline">
+          ← back to CartPole
+        </Link>
         <div className="ml-auto flex items-center gap-1 rounded-md bg-neutral-100 p-0.5 text-[12px]">
           {(["CartPole-v1", "MountainCar-v0"] as const).map((env) => (
             <button

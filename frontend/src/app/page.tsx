@@ -2,9 +2,9 @@
 
 import dynamic from "next/dynamic";
 
-// The dashboard draws on canvas and opens a WebSocket: render it in the browser only.
-const Dashboard = dynamic(() => import("@/components/Dashboard"), { ssr: false });
+// Everything draws in the browser (canvas, charts): render client-side only.
+const CartPolePage = dynamic(() => import("@/components/CartPolePage"), { ssr: false });
 
 export default function Home() {
-  return <Dashboard />;
+  return <CartPolePage />;
 }
