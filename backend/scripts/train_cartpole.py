@@ -138,6 +138,62 @@ def record_episode(session: ExplainSession | None, it: int, folder: Path, name: 
 
 
 @torch.no_grad()
+def quality_test(policy, starts: int = 20, max_steps: int = 10_000) -> dict:
+    """The final policy, tested harder than training: up to `max_steps` (training stops at 500)
+    from `starts` different start states. Survival, centering, calmness and action switching."""
+    env = gym.make("CartPole-v1", max_episode_steps=max_steps)
+    lengths, abs_x, abs_th = [], [], []
+    switches = survived = fell_cart = fell_pole = 0
+    for i in range(starts):
+        obs, _ = env.reset(seed=20_000 + i)
+        prev, n = None, 0
+        while True:
+            a = policy(obs)
+            switches += int(prev is not None and a != prev)
+            prev = a
+            abs_x.append(abs(float(obs[0])))
+            abs_th.append(abs(float(obs[2])))
+            obs, _, term, trunc, _ = env.step(a)
+            n += 1
+            if term or trunc:
+                break
+        lengths.append(n)
+        if not term:
+            survived += 1
+        elif abs(obs[0]) > 2.4:
+            fell_cart += 1
+        else:
+            fell_pole += 1
+    env.close()
+    grid = np.linspace(0, max_steps, 101)
+    return {
+        "starts": starts, "max_steps": max_steps, "lengths": lengths, "survived": survived,
+        "fell_cart": fell_cart, "fell_pole": fell_pole, "median_len": float(np.median(lengths)),
+        "mean_abs_x": float(np.mean(abs_x)), "mean_abs_theta": float(np.mean(abs_th)),
+        "switch_rate": switches / max(1, sum(lengths) - starts),
+        "survival_x": grid.tolist(), "survival": [float(np.mean([L >= g for L in lengths])) for g in grid],
+    }
+
+
+def speed_stability(rows: list[dict]) -> dict:
+    """Speed: environment steps until the policy first scores 500. Stability: what happens after."""
+    first_eval = next((r for r in rows if r["eval"] is not None and r["eval"] >= 500), None)
+    first_batch = next((r for r in rows if r["ret"] >= 475), None)
+    after = rows[rows.index(first_batch) + 1:] if first_batch else []
+    evals_after = [r["eval"] for r in after if r["eval"] is not None]
+    return {
+        "total_env_steps": rows[-1]["env_steps"], "iters": rows[-1]["iter"],
+        "eval500_iter": first_eval["iter"] if first_eval else None,
+        "eval500_steps": first_eval["env_steps"] if first_eval else None,
+        "batch475_iter": first_batch["iter"] if first_batch else None,
+        "batch475_steps": first_batch["env_steps"] if first_batch else None,
+        "stay_475": float(np.mean([r["ret"] >= 475 for r in after])) if after else None,
+        "drops_below_250": sum(r["ret"] < 250 for r in after),
+        "evals_500_after": float(np.mean([e >= 500 for e in evals_after])) if evals_after else None,
+    }
+
+
+@torch.no_grad()
 def true_values(session: ExplainSession, states: list, rollouts: int = 10, horizon: int = 600, seed: int = 0):
     """Monte Carlo ground truth: average discounted return of the CURRENT policy from each state.
 
@@ -184,6 +240,8 @@ def main() -> None:
     ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
     ap.add_argument("--record-every", type=int, default=10, help="save one episode of the current policy every N iterations")
     ap.add_argument("--open", action=argparse.BooleanOptionalAction, default=True, help="open the plot at the end")
+    ap.add_argument("--quality-steps", type=int, default=10_000, help="length of the final-policy test (training stops at 500)")
+    ap.add_argument("--quality-starts", type=int, default=20, help="start states in the final-policy test")
     args = ap.parse_args()
 
     cfg = LearnConfig(env_id="CartPole-v1", seed=args.seed, batch_episodes=args.batch, hidden=args.hidden,
@@ -204,7 +262,7 @@ def main() -> None:
 
     print(f"reference policy (angle + 0.5·ang_vel > 0 → right): eval return {evaluate(reference_action):.0f} / 500")
     print(f"untrained policy: eval return {evaluate(lambda s: greedy_action(session, s)):.0f} / 500\n")
-    cols = ["iter", "ret", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "agree", "p_good",
+    cols = ["iter", "ret", "env_steps", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "agree", "p_good",
             "ce_good", "dir", "eval", "true_err", "noise", "V_mean", "Vtrue_mean"]
     print(f"{'iter':>4} {'ret':>6} {'Lv (before → after)':>22} {'rel':>5} {'corr':>5} {'Lpi':>8} {'H':>5} {'EV':>6} "
           f"{'|A|':>6} {'KL':>8} {'agree':>6} {'p_good':>6} {'ce_good':>7} {'dir':>5} {'eval':>5}")
@@ -227,6 +285,8 @@ def main() -> None:
     writer = csv.DictWriter(f, fieldnames=cols)
     writer.writeheader()
     it = 0
+    env_steps = 0  # environment steps used so far: the fair x-axis between algorithms
+    completed = False
     try:
         for it in range(1, args.iters + 1):
             tr = session.iterate()  # collect → critic step → actor step (fully recorded)
@@ -245,7 +305,8 @@ def main() -> None:
             G, V = np.array(tr["returns"]), np.array(tr["values"])  # V: critic BEFORE its step, on fresh data
             rel = float(np.sqrt(np.mean((G - V) ** 2)) / (np.sqrt(np.mean(G**2)) + 1e-12))
             corr = float(np.corrcoef(G, V)[0, 1]) if G.std() > 1e-9 and V.std() > 1e-9 else float("nan")
-            row = {"iter": it, "ret": s["mean_return"], "Lv": s["critic_loss"], "Lv_after": s["critic_loss_after"],
+            env_steps += s["steps"]
+            row = {"iter": it, "ret": s["mean_return"], "env_steps": env_steps, "Lv": s["critic_loss"], "Lv_after": s["critic_loss_after"],
                    "rel": rel, "corr": corr, "Lpi": s["actor_loss"], "H": s["entropy"], "EV": ev,
                    "absA": s["mean_abs_adv"], "KL": kl, "agree": agree, "p_good": p_good, "ce_good": ce_good,
                    "dir": direction, "eval": None,
@@ -291,14 +352,28 @@ def main() -> None:
         print("\nstopped by Ctrl-C")
         status("stopped", it)
     else:
-        status("finished", it)
+        completed = True
     finally:
         f.close()
 
-    print(f"\neverything saved in: {out_dir}   (web page: http://localhost:3000/terminal)")
     if not rows:
         return
     _diagnose(rows)
+    if completed:
+        status("testing", it)
+        torch.save({"actor": session.actor.state_dict(), "critic": session.critic.state_dict()}, out_dir / "final_weights.pt")
+        print(f"\nScorecard (final policy tested for up to {args.quality_steps} steps from {args.quality_starts} start states) …")
+        card = {
+            "speed_stability": speed_stability(rows),
+            "quality": {
+                "learned": quality_test(lambda st: greedy_action(session, st), args.quality_starts, args.quality_steps),
+                "good": quality_test(reference_action, args.quality_starts, args.quality_steps),
+            },
+        }
+        (out_dir / "scorecard.json").write_text(json.dumps(card))
+        _print_scorecard(card)
+        status("finished", it)
+    print(f"\neverything saved in: {out_dir}   (web page: http://localhost:3000)")
     if fig is not None:
         if not live or it < args.iters:
             _draw(fig, axes, rows, live)
@@ -352,6 +427,18 @@ def _draw(fig, axes, rows: list[dict], live: bool) -> None:
     fig.tight_layout()
     if live:
         plt.pause(0.001)
+
+
+def _print_scorecard(card: dict) -> None:
+    ss = card["speed_stability"]
+    fmt_steps = lambda v: f"{v:,}" if v is not None else "never"  # noqa: E731
+    print(f"  speed      eval first 500 at {fmt_steps(ss['eval500_steps'])} env steps (iteration {ss['eval500_iter']}); "
+          f"batch first ≥ 475 at {fmt_steps(ss['batch475_steps'])} (iteration {ss['batch475_iter']})")
+    if ss["stay_475"] is not None:
+        print(f"  stability  after that: {ss['stay_475']:.0%} of batches stayed ≥ 475, {ss['drops_below_250']} drops below 250")
+    for name, q in card["quality"].items():
+        print(f"  quality    {name:7s}: survived {q['survived']}/{q['starts']} · median {q['median_len']:.0f} steps · "
+              f"mean |x| {q['mean_abs_x']:.2f} m · mean |θ| {q['mean_abs_theta']:.3f} rad · switches action {q['switch_rate']:.0%} of steps")
 
 
 def _diagnose(rows: list[dict]) -> None:

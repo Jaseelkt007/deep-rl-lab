@@ -19,11 +19,40 @@ interface EpisodeInfo {
   steps: number;
   terminated: boolean;
 }
+interface Quality {
+  starts: number;
+  max_steps: number;
+  lengths: number[];
+  survived: number;
+  fell_cart: number;
+  fell_pole: number;
+  median_len: number;
+  mean_abs_x: number;
+  mean_abs_theta: number;
+  switch_rate: number;
+  survival_x: number[];
+  survival: number[];
+}
+interface Scorecard {
+  speed_stability: {
+    total_env_steps: number;
+    iters: number;
+    eval500_iter: number | null;
+    eval500_steps: number | null;
+    batch475_iter: number | null;
+    batch475_steps: number | null;
+    stay_475: number | null;
+    drops_below_250: number;
+    evals_500_after: number | null;
+  };
+  quality: { learned: Quality; good: Quality };
+}
 interface Latest {
   settings: Record<string, number | string | boolean>;
   status: { state?: string; iter?: number; iters?: number; started?: string };
   rows: Row[];
   episodes: EpisodeInfo[];
+  scorecard: Scorecard | null;
 }
 interface Episode extends EpisodeInfo {
   states: number[][];
@@ -230,6 +259,128 @@ function Episodes({ data, env }: { data: Latest; env: (typeof ENVS)["CartPole-v1
   );
 }
 
+// ------------------------------------------------------------------ scorecard
+const steps = (v: number | null | undefined) => (v == null ? "never" : Math.round(v).toLocaleString());
+
+function ScorecardPanel({ data }: { data: Latest }) {
+  const card = data.scorecard;
+  const rows = data.rows;
+  const batch = Number(data.settings.batch ?? 5);
+  const speed = useMemo(() => {
+    // environment steps used so far; older logs without the column: rebuild it from the batch sizes
+    const x: number[] = [];
+    rows.forEach((r, k) => x.push(r.env_steps != null ? (r.env_steps as number) : (k ? x[k - 1] : 0) + (r.ret as number) * batch));
+    return { x, ys: [rows.map((r) => r.ret), rows.map((r) => r.eval)] };
+  }, [rows, batch]);
+  const surv = card ? { x: card.quality.learned.survival_x, ys: [card.quality.learned.survival, card.quality.good.survival] } : null;
+  const ss = card?.speed_stability;
+  const q = card?.quality;
+  const cell = "px-2 py-1.5 text-right tabular-nums";
+  const head = "px-2 py-1 text-right font-normal";
+  const qualityCells = (x: Quality) => (
+    <>
+      <td className={cell}>
+        {x.survived}/{x.starts}
+      </td>
+      <td className={cell}>{Math.round(x.median_len).toLocaleString()}</td>
+      <td className={cell}>{x.mean_abs_x.toFixed(2)} m</td>
+      <td className={cell}>{x.mean_abs_theta.toFixed(3)} rad</td>
+      <td className={cell}>{(x.switch_rate * 100).toFixed(0)}%</td>
+    </>
+  );
+  return (
+    <Panel
+      title="Scorecard"
+      help="Compare policies beyond the 500 cap. Speed: environment steps until the greedy policy first scores 500 (iterations differ between algorithms, environment steps do not). Stability: after the batch first averages ≥ 475, how often it stays there. Quality: the FINAL policy, most likely action, tested for up to 10,000 steps from 20 start states (training stops at 500): survival, centering |x|, calmness |θ| and how often it switches action."
+    >
+      {!card ? (
+        <div className="py-3 text-[12px] text-neutral-400">
+          {data.status.state === "testing" ? "testing the final policy…" : data.status.state === "running" ? "appears when training ends" : "no scorecard in this run (re-run the train command)"}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead className="text-[11px] text-neutral-500">
+                <tr>
+                  <th className="px-2 py-1 text-left font-normal">policy</th>
+                  <th className={head}>speed: steps to 500</th>
+                  <th className={head}>stability: stays ≥ 475</th>
+                  <th className={head}>
+                    survives {q!.learned.max_steps.toLocaleString()} steps
+                  </th>
+                  <th className={head}>median survival</th>
+                  <th className={head}>mean |cart position|</th>
+                  <th className={head}>mean |pole angle|</th>
+                  <th className={head}>action switches</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-t border-neutral-100">
+                  <td className="px-2 py-1.5 text-left">
+                    <span className="mr-1.5 inline-block h-2 w-2 rounded-sm" style={{ background: C.actor }} />
+                    batch actor-critic · final (iter {ss!.iters})
+                  </td>
+                  <td className={cell}>
+                    {steps(ss!.eval500_steps)} {ss!.eval500_iter != null && <span className="text-neutral-400">(iter {ss!.eval500_iter})</span>}
+                  </td>
+                  <td className={cell}>
+                    {ss!.stay_475 == null ? "–" : `${Math.round(ss!.stay_475 * 100)}%`}
+                    {ss!.drops_below_250 > 0 && <span className="text-neutral-400"> · {ss!.drops_below_250} drops</span>}
+                  </td>
+                  {qualityCells(q!.learned)}
+                </tr>
+                <tr className="border-t border-neutral-100">
+                  <td className="px-2 py-1.5 text-left">
+                    <span className="mr-1.5 inline-block h-2 w-2 rounded-sm" style={{ background: C.pos }} />
+                    good policy (hand-written)
+                  </td>
+                  <td className={cell}>–</td>
+                  <td className={cell}>–</td>
+                  {qualityCells(q!.good)}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <div>
+              <div className="text-[11.5px] font-medium text-neutral-700">Speed: episode length vs environment steps used</div>
+              <UChart
+                x={speed.x}
+                ys={speed.ys}
+                height={160}
+                xLabel="environment steps"
+                series={[
+                  { label: "batch", color: C.ink, width: 1.5 },
+                  { label: "eval", color: C.pos, width: 1.75 },
+                ]}
+              />
+            </div>
+            {surv && (
+              <div>
+                <div className="text-[11.5px] font-medium text-neutral-700">
+                  Quality: share of the {q!.learned.starts} starts still balancing (long test)
+                </div>
+                <UChart
+                  x={surv.x}
+                  ys={surv.ys}
+                  height={160}
+                  yRange={[0, 1]}
+                  xLabel="step"
+                  series={[
+                    { label: "batch actor-critic (final)", color: C.actor, width: 2 },
+                    { label: "good policy", color: C.pos, width: 2 },
+                  ]}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 const TABLE: [string, string, number][] = [
   ["iter", "iter", 0],
   ["ret", "length", 1],
@@ -291,7 +442,7 @@ export default function RunPage() {
         if (!alive) return;
         setData(d);
         setErr("");
-        if (d.status.state === "running") timer = window.setTimeout(load, 2000); // live while training
+        if (d.status.state === "running" || d.status.state === "testing") timer = window.setTimeout(load, 2000); // live while training
       } catch (e) {
         if (alive) setErr(e instanceof Error && e.message !== "Failed to fetch" ? e.message : "Backend not reachable on :8000.");
       }
@@ -365,6 +516,8 @@ export default function RunPage() {
             </button>
           </div>
         </div>
+
+        {data && data.rows.length > 0 && <ScorecardPanel data={data} />}
 
         {/* replay + setup */}
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_340px]">

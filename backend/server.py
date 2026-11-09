@@ -421,8 +421,9 @@ def cli_latest() -> dict:
         ep = json.loads(p.read_text())
         episodes.append({k: ep[k] for k in ("name", "iter", "steps", "terminated")})
     status = json.loads((d / "status.json").read_text()) if (d / "status.json").exists() else {}
+    card = json.loads((d / "scorecard.json").read_text()) if (d / "scorecard.json").exists() else None
     return clean({"settings": json.loads((d / "settings.json").read_text()), "status": status,
-                  "rows": rows, "episodes": episodes})
+                  "rows": rows, "episodes": episodes, "scorecard": card})
 
 
 @app.get("/api/cli/latest/episode/{name}")
