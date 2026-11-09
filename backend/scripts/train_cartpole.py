@@ -25,6 +25,17 @@ Log columns:
     eval    every --eval-every iterations: return of the current policy, always taking its most likely
             action, on 10 fixed start states (500 = perfect)
 
+Critic quality that does NOT grow with the episode length (the raw loss does):
+    rel     relative error  √(2·Lv) / RMS(G): how wrong V is as a fraction of the size of the returns
+            (on a FRESH batch: the critic has not trained on it yet)
+    corr    correlation(V, G): does the critic rank states right, whatever the scale? (1 = perfectly)
+    every --truth-every iterations, a ground-truth check:
+            take 10 states from the batch, play 10 episodes from each with the current policy, average
+            their discounted returns = the TRUE value V^π(s) of that state. Then
+            true_err = RMS(V − V^π) / RMS(V^π)   the critic's real error, single-return noise removed
+            noise    = RMS(scatter of single returns around V^π) / RMS(V^π)
+                       = how much of `rel` NO critic can remove (the policy samples its actions)
+
 Reference policy ("a good policy we know"): push right if  pole angle + 0.5 × angular velocity > 0,
 else left. It scores 500 (the maximum) on every start state, so it is optimal for this task.
 """
@@ -33,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
 import time
 from pathlib import Path
@@ -77,6 +89,36 @@ def evaluate(policy, episodes: int = 10, render: bool = False) -> float:
     return float(np.mean(total))
 
 
+@torch.no_grad()
+def true_values(session: ExplainSession, states: list, rollouts: int = 10, horizon: int = 600, seed: int = 0):
+    """Monte Carlo ground truth: average discounted return of the CURRENT policy from each state.
+
+    No time limit (the critic bootstraps at the 500-step cut, so it estimates the never-ending
+    task); 600 steps cover it (0.99^600 ≈ 0.002). Returns (mean, std) per state."""
+    env = gym.make("CartPole-v1").unwrapped  # no TimeLimit wrapper
+    gen = torch.Generator().manual_seed(seed)
+    g = session.cfg.gamma
+    means, stds = [], []
+    for k, st in enumerate(states):
+        rets = []
+        for r in range(rollouts):
+            env.reset(seed=seed + 1000 * k + r)
+            env.state = np.array(st, dtype=np.float64)  # start exactly in this state
+            obs, ret, disc = np.array(st), 0.0, 1.0
+            for _ in range(horizon):
+                p = F.softmax(session.actor(torch.as_tensor(session.encoder(obs, 0))), -1)
+                obs, rew, term, _, _ = env.step(int(torch.multinomial(p, 1, generator=gen)))
+                ret += disc * rew
+                disc *= g
+                if term:
+                    break
+            rets.append(ret)
+        means.append(float(np.mean(rets)))
+        stds.append(float(np.std(rets)))
+    env.close()
+    return np.array(means), np.array(stds)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iters", type=int, default=150)
@@ -90,6 +132,7 @@ def main() -> None:
     ap.add_argument("--eval-every", type=int, default=10)
     ap.add_argument("--render-every", type=int, default=0, help="show the current policy playing every N iterations (0 = never)")
     ap.add_argument("--plot", action="store_true", help="live plot window (also saved as PNG)")
+    ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
     args = ap.parse_args()
 
     cfg = LearnConfig(env_id="CartPole-v1", seed=args.seed, batch_episodes=args.batch, hidden=args.hidden,
@@ -99,11 +142,14 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     csv_path = out_dir / f"cartpole-{stamp}.csv"
+    csv_path.with_suffix(".json").write_text(json.dumps(vars(args), indent=2))  # the settings of this run
 
     print(f"reference policy (angle + 0.5·ang_vel > 0 → right): eval return {evaluate(reference_action):.0f} / 500")
     print(f"untrained policy: eval return {evaluate(lambda s: greedy_action(session, s)):.0f} / 500\n")
-    cols = ["iter", "ret", "Lv", "Lv_after", "Lpi", "H", "EV", "absA", "KL", "agree", "eval"]
-    print(f"{'iter':>4} {'ret':>6} {'Lv (before → after)':>22} {'Lpi':>8} {'H':>5} {'EV':>6} {'|A|':>6} {'KL':>8} {'agree':>6} {'eval':>5}")
+    cols = ["iter", "ret", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "agree", "eval",
+            "true_err", "noise", "V_mean", "Vtrue_mean"]
+    print(f"{'iter':>4} {'ret':>6} {'Lv (before → after)':>22} {'rel':>5} {'corr':>5} {'Lpi':>8} {'H':>5} {'EV':>6} "
+          f"{'|A|':>6} {'KL':>8} {'agree':>6} {'eval':>5}")
 
     rows: list[dict] = []
     fig = axes = None
@@ -131,18 +177,36 @@ def main() -> None:
             states = [st for ep in tr["episodes"] for st in ep["states"]]
             agree = float(np.mean([int(np.argmax(p)) == reference_action(st) for p, st in zip(p_old, states)]))
             ev = s["ev"] if s["ev"] is not None else float("nan")
+            G, V = np.array(tr["returns"]), np.array(tr["values"])  # V: critic BEFORE its step, on fresh data
+            rel = float(np.sqrt(np.mean((G - V) ** 2)) / (np.sqrt(np.mean(G**2)) + 1e-12))
+            corr = float(np.corrcoef(G, V)[0, 1]) if G.std() > 1e-9 and V.std() > 1e-9 else float("nan")
             row = {"iter": it, "ret": s["mean_return"], "Lv": s["critic_loss"], "Lv_after": s["critic_loss_after"],
-                   "Lpi": s["actor_loss"], "H": s["entropy"], "EV": ev, "absA": s["mean_abs_adv"], "KL": kl,
-                   "agree": agree, "eval": None}
+                   "rel": rel, "corr": corr, "Lpi": s["actor_loss"], "H": s["entropy"], "EV": ev,
+                   "absA": s["mean_abs_adv"], "KL": kl, "agree": agree, "eval": None,
+                   "true_err": None, "noise": None, "V_mean": None, "Vtrue_mean": None}
             if it % args.eval_every == 0 or it == 1 or it == args.iters:
                 row["eval"] = evaluate(lambda st: greedy_action(session, st))
+            truth_line = ""
+            if args.truth_every and (it % args.truth_every == 0 or it == 1):
+                probe = [states[i] for i in np.linspace(0, len(states) - 1, 10).astype(int)]
+                vt, vs = true_values(session, probe, seed=args.seed + it)
+                with torch.no_grad():
+                    vc = session.critic(torch.as_tensor(session.encoder(np.array(probe), 0))).numpy()
+                scale = np.sqrt(np.mean(vt**2)) + 1e-12
+                row.update(true_err=float(np.sqrt(np.mean((vc - vt) ** 2)) / scale),
+                           noise=float(np.sqrt(np.mean(vs**2)) / scale), V_mean=float(vc.mean()), Vtrue_mean=float(vt.mean()))
+                truth_line = (f"     ↳ critic vs TRUE value on 10 states: critic says {row['V_mean']:.1f}, truth {row['Vtrue_mean']:.1f} "
+                              f"→ true error {row['true_err']:.0%} of the value (single-return noise {row['noise']:.0%})")
             rows.append(row)
             writer.writerow(row)
             f.flush()
             ev_txt = f"{ev:6.2f}" if ev == ev else "   n/a"
             eval_txt = f"{row['eval']:5.0f}" if row["eval"] is not None else ""
-            print(f"{it:4d} {s['mean_return']:6.1f} {s['critic_loss']:10.2f} → {s['critic_loss_after']:9.2f} "
+            corr_txt = f"{corr:5.2f}" if corr == corr else "  n/a"
+            print(f"{it:4d} {s['mean_return']:6.1f} {s['critic_loss']:10.2f} → {s['critic_loss_after']:9.2f} {rel:5.0%} {corr_txt} "
                   f"{s['actor_loss']:8.3f} {s['entropy']:5.2f} {ev_txt} {s['mean_abs_adv']:6.2f} {kl:8.5f} {agree:6.0%} {eval_txt}")
+            if truth_line:
+                print(truth_line)
 
             if args.render_every and it % args.render_every == 0:
                 print(f"     ↳ showing the current policy (most likely action) in a window …")
@@ -177,7 +241,12 @@ def _draw(fig, axes, rows: list[dict], live: bool) -> None:
         (axes[0, 0], "return", [("batch return", [r["ret"] for r in rows], it), ("eval (greedy)", [r["eval"] for r in rows if r["eval"] is not None], ev_it)], False),
         (axes[0, 1], "critic loss ½(G−V)²", [("before step", [r["Lv"] for r in rows], it), ("after step", [r["Lv_after"] for r in rows], it)], True),
         (axes[0, 2], "actor loss −A·log π", [("actor loss", [r["Lpi"] for r in rows], it)], False),
-        (axes[1, 0], "critic explained variance", [("EV", [r["EV"] for r in rows], it)], False),
+        (axes[1, 0], "critic quality (scale-free)", [
+            ("relative error (batch)", [r["rel"] for r in rows], it),
+            ("corr(V, G)", [r["corr"] for r in rows], it),
+            ("TRUE error vs V^π", [r["true_err"] for r in rows if r["true_err"] is not None], [r["iter"] for r in rows if r["true_err"] is not None]),
+            ("noise floor", [r["noise"] for r in rows if r["noise"] is not None], [r["iter"] for r in rows if r["noise"] is not None]),
+        ], False),
         (axes[1, 1], "policy: entropy and agreement with reference", [("entropy", [r["H"] for r in rows], it), ("agree with reference", [r["agree"] for r in rows], it)], False),
         (axes[1, 2], "policy change per update KL(π_old‖π_new)", [("KL", [r["KL"] for r in rows], it)], True),
     ]
@@ -191,7 +260,7 @@ def _draw(fig, axes, rows: list[dict], live: bool) -> None:
         ax.grid(alpha=0.3)
         if len(series) > 1:
             ax.legend(fontsize=8)
-    axes[1, 0].set_ylim(-1, 1)
+    axes[1, 0].set_ylim(-0.2, 1.2)
     fig.tight_layout()
     if live:
         plt.pause(0.001)
