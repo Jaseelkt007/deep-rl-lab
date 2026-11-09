@@ -24,6 +24,13 @@ Log columns:
     eval    every --eval-every iterations: return of the current policy, always taking its most likely
             action, on 10 fixed start states (500 = perfect)
 
+Actor quality that does NOT grow with the episode length (the actor loss ≈ |A| × entropy does):
+    p_good  average probability the actor gives to the good policy's action (0.5 = coin flip, 1 = perfect)
+    ce_good cross-entropy to the good policy: mean −log π(good action | s)  (0.69 = coin flip, 0 = perfect).
+            A real classification loss, possible only because we know a good policy here.
+    dir     did this update move the right way? correlation between A_t and the change of
+            log π(a_t|s_t) caused by the update (> 0: higher-advantage actions gained more probability)
+
 Critic quality that does NOT grow with the episode length (the raw loss does):
     rel     relative error  √(2·Lv) / RMS(G): how wrong V is as a fraction of the size of the returns
             (on a FRESH batch: the critic has not trained on it yet)
@@ -148,10 +155,10 @@ def main() -> None:
 
     print(f"reference policy (angle + 0.5·ang_vel > 0 → right): eval return {evaluate(reference_action):.0f} / 500")
     print(f"untrained policy: eval return {evaluate(lambda s: greedy_action(session, s)):.0f} / 500\n")
-    cols = ["iter", "ret", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "agree", "eval",
-            "true_err", "noise", "V_mean", "Vtrue_mean"]
+    cols = ["iter", "ret", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "agree", "p_good",
+            "ce_good", "dir", "eval", "true_err", "noise", "V_mean", "Vtrue_mean"]
     print(f"{'iter':>4} {'ret':>6} {'Lv (before → after)':>22} {'rel':>5} {'corr':>5} {'Lpi':>8} {'H':>5} {'EV':>6} "
-          f"{'|A|':>6} {'KL':>8} {'agree':>6} {'eval':>5}")
+          f"{'|A|':>6} {'KL':>8} {'agree':>6} {'p_good':>6} {'ce_good':>7} {'dir':>5} {'eval':>5}")
 
     rows: list[dict] = []
     fig = axes = None
@@ -178,13 +185,19 @@ def main() -> None:
             kl = float(np.mean(np.sum(p_old * (np.log(p_old + 1e-12) - np.log(p_new + 1e-12)), axis=1)))
             states = [st for ep in tr["episodes"] for st in ep["states"]]
             agree = float(np.mean([int(np.argmax(p)) == reference_action(st) for p, st in zip(p_old, states)]))
+            good = np.array([p[reference_action(st)] for p, st in zip(p_old, states)])  # π(good action | s)
+            p_good, ce_good = float(good.mean()), float(np.mean(-np.log(good + 1e-12)))
+            adv = np.array(tr["advantages"])
+            dlogp = np.array(tr["actor"]["logp_after"]) - np.array(tr["actor"]["logp_before"])
+            direction = float(np.corrcoef(adv, dlogp)[0, 1]) if adv.std() > 1e-9 and dlogp.std() > 1e-12 else float("nan")
             ev = s["ev"] if s["ev"] is not None else float("nan")
             G, V = np.array(tr["returns"]), np.array(tr["values"])  # V: critic BEFORE its step, on fresh data
             rel = float(np.sqrt(np.mean((G - V) ** 2)) / (np.sqrt(np.mean(G**2)) + 1e-12))
             corr = float(np.corrcoef(G, V)[0, 1]) if G.std() > 1e-9 and V.std() > 1e-9 else float("nan")
             row = {"iter": it, "ret": s["mean_return"], "Lv": s["critic_loss"], "Lv_after": s["critic_loss_after"],
                    "rel": rel, "corr": corr, "Lpi": s["actor_loss"], "H": s["entropy"], "EV": ev,
-                   "absA": s["mean_abs_adv"], "KL": kl, "agree": agree, "eval": None,
+                   "absA": s["mean_abs_adv"], "KL": kl, "agree": agree, "p_good": p_good, "ce_good": ce_good,
+                   "dir": direction, "eval": None,
                    "true_err": None, "noise": None, "V_mean": None, "Vtrue_mean": None}
             if it % args.eval_every == 0 or it == 1 or it == args.iters:
                 row["eval"] = evaluate(lambda st: greedy_action(session, st))
@@ -206,7 +219,8 @@ def main() -> None:
             eval_txt = f"{row['eval']:5.0f}" if row["eval"] is not None else ""
             corr_txt = f"{corr:5.2f}" if corr == corr else "  n/a"
             print(f"{it:4d} {s['mean_return']:6.1f} {s['critic_loss']:10.2f} → {s['critic_loss_after']:9.2f} {rel:5.0%} {corr_txt} "
-                  f"{s['actor_loss']:8.3f} {s['entropy']:5.2f} {ev_txt} {s['mean_abs_adv']:6.2f} {kl:8.5f} {agree:6.0%} {eval_txt}")
+                  f"{s['actor_loss']:8.3f} {s['entropy']:5.2f} {ev_txt} {s['mean_abs_adv']:6.2f} {kl:8.5f} {agree:6.0%} "
+                  f"{p_good:6.2f} {ce_good:7.3f} {direction:5.2f} {eval_txt}")
             if truth_line:
                 print(truth_line)
 
@@ -247,8 +261,9 @@ def _draw(fig, axes, rows: list[dict], live: bool) -> None:
         (axes[0, 0], "1. Is the agent learning?  episode length (500 = perfect)", [
             ("batch: mean episode length", [r["ret"] for r in rows], it),
             ("eval: most likely action, 10 fixed starts", [r["eval"] for r in rows if r["eval"] is not None], ev_it)], False),
-        (axes[0, 1], "2. Is the policy right?  agreement with the good policy", [
-            ("agreement with 'angle + 0.5·ang_vel > 0'", [r["agree"] for r in rows], it),
+        (axes[0, 1], "2. Is the actor learning?  (does not grow with episode length)", [
+            ("P(good action): 0.5 coin flip → 1 perfect", [r["p_good"] for r in rows], it),
+            ("most likely action = good action", [r["agree"] for r in rows], it),
             ("entropy (0.69 = coin flip, 0 = always same)", [r["H"] for r in rows], it)], False),
         (axes[1, 0], "3. Critic loss ½(G−V)²  (grows with the returns)", [
             ("critic loss on the new batch", [r["Lv"] for r in rows], it)], True),
