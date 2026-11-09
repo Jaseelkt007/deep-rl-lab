@@ -23,7 +23,10 @@ from concurrent.futures import Future, ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Literal
 
+import csv as _csv
+
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -383,6 +386,59 @@ def learn_trace(sid: str, k: int) -> dict:
     if k not in session.traces:
         raise HTTPException(404, f"iteration {k} was fast-forwarded and not recorded")
     return clean({"trace": session.traces[k], "summaries": session.summaries})
+
+
+# ----------------------------------------------------------------------------
+# Terminal run: the latest `scripts/train_cartpole.py` run, saved in runs/cli/latest/
+# ----------------------------------------------------------------------------
+CLI_NAME_RE = re.compile(r"^iter\d{4}$")
+
+
+def _cli_dir():
+    return runs_dir() / "cli" / "latest"
+
+
+def _num(v: str):
+    if v in ("", "None", "nan"):
+        return None
+    try:
+        return float(v)
+    except ValueError:
+        return v
+
+
+@app.get("/api/cli/latest")
+def cli_latest() -> dict:
+    d = _cli_dir()
+    if not (d / "settings.json").exists():
+        raise HTTPException(404, "no terminal run yet: run  uv run python scripts/train_cartpole.py")
+    rows = []
+    if (d / "log.csv").exists():
+        with open(d / "log.csv", newline="") as f:
+            rows = [{k: _num(v) for k, v in r.items()} for r in _csv.DictReader(f)]
+    episodes = []
+    for p in sorted((d / "episodes").glob("iter*.json")):
+        ep = json.loads(p.read_text())
+        episodes.append({k: ep[k] for k in ("name", "iter", "steps", "terminated")})
+    status = json.loads((d / "status.json").read_text()) if (d / "status.json").exists() else {}
+    return clean({"settings": json.loads((d / "settings.json").read_text()), "status": status,
+                  "rows": rows, "episodes": episodes})
+
+
+@app.get("/api/cli/latest/episode/{name}")
+def cli_episode(name: str) -> dict:
+    p = _cli_dir() / "episodes" / f"{name}.json"
+    if not CLI_NAME_RE.match(name) or not p.exists():
+        raise HTTPException(404, f"no episode {name}")
+    return json.loads(p.read_text())
+
+
+@app.get("/api/cli/latest/gif/{name}")
+def cli_gif(name: str):
+    p = _cli_dir() / "episodes" / f"{name}.gif"
+    if not CLI_NAME_RE.match(name) or not p.exists():
+        raise HTTPException(404, f"no gif {name}")
+    return FileResponse(p, media_type="image/gif")
 
 
 # ----------------------------------------------------------------------------

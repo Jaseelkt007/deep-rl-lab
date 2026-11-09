@@ -1,8 +1,14 @@
 """Train CartPole with batch actor-critic from the terminal. No web server needed.
 
     uv run python scripts/train_cartpole.py        # the one command: logs + game window every 25 iterations
-                                                   # + one plot (runs/cli/latest.png) opened at the end
+                                                   # + one plot opened at the end
     uv run python scripts/train_cartpole.py --help # options (learning rates, batch size, --render-every 0, ...)
+
+Everything of the LATEST run is saved in runs/cli/latest/ (cleared when a new run starts):
+    log.csv, settings.json, status.json, plot.png,
+    episodes/iterNNNN.json + .gif   the current policy playing one episode at iteration 1, every
+                                    --render-every iterations and at the end (JSON = for the web page)
+The web page http://localhost:3000/terminal shows it (live while training).
 
 One iteration (same code as the Learn page, rl/explain.py):
     1. the FROZEN policy plays --batch complete episodes
@@ -98,6 +104,35 @@ def evaluate(policy, episodes: int = 10, render: bool = False) -> float:
 
 
 @torch.no_grad()
+def record_episode(session: ExplainSession, it: int, folder: Path) -> dict:
+    """Play one episode with the current policy (most likely action) from a fixed start state and
+    save it: trajectory as JSON (the web page replays it) and frames as a GIF."""
+    from PIL import Image
+
+    env = gym.make("CartPole-v1", render_mode="rgb_array")
+    obs, _ = env.reset(seed=10_000)  # the same start as the first eval episode
+    states, actions, probs, frames = [], [], [], []
+    while True:
+        p = F.softmax(session.actor(torch.as_tensor(session.encoder(np.asarray(obs), 0))), -1)
+        a = int(p.argmax())
+        states.append(np.asarray(obs, dtype=float).tolist())
+        actions.append(a)
+        probs.append(p.tolist())
+        if len(states) % 2 == 1:  # every 2nd frame keeps the GIF small
+            frames.append(Image.fromarray(env.render()).resize((300, 200)))
+        obs, _, term, trunc, _ = env.step(a)
+        if term or trunc:
+            break
+    env.close()
+    name = f"iter{it:04d}"
+    info = {"name": name, "iter": it, "steps": len(actions), "terminated": bool(term)}
+    (folder / f"{name}.json").write_text(json.dumps({**info, "states": states, "actions": actions, "probs": probs,
+                                                    "final_state": np.asarray(obs, dtype=float).tolist()}))
+    frames[0].save(folder / f"{name}.gif", save_all=True, append_images=frames[1:], duration=40, loop=0)
+    return info
+
+
+@torch.no_grad()
 def true_values(session: ExplainSession, states: list, rollouts: int = 10, horizon: int = 600, seed: int = 0):
     """Monte Carlo ground truth: average discounted return of the CURRENT policy from each state.
 
@@ -140,18 +175,24 @@ def main() -> None:
     ap.add_argument("--eval-every", type=int, default=10)
     ap.add_argument("--render-every", type=int, default=25, help="show the current policy playing every N iterations (0 = never)")
     ap.add_argument("--plot", action=argparse.BooleanOptionalAction, default=True,
-                    help="plot to runs/cli/latest.png (overwritten each run) and open it at the end")
+                    help="plot to runs/cli/latest/plot.png and open it at the end")
     ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
     args = ap.parse_args()
 
     cfg = LearnConfig(env_id="CartPole-v1", seed=args.seed, batch_episodes=args.batch, hidden=args.hidden,
                       actor_lr=args.actor_lr, critic_lr=args.critic_lr, gamma=args.gamma, optimizer=args.optimizer)
     session = ExplainSession(cfg)
-    out_dir = runs_dir() / "cli"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    csv_path = out_dir / f"cartpole-{stamp}.csv"
-    csv_path.with_suffix(".json").write_text(json.dumps(vars(args), indent=2))  # the settings of this run
+    out_dir = runs_dir() / "cli" / "latest"  # only the latest run is kept
+    shutil.rmtree(out_dir, ignore_errors=True)
+    (out_dir / "episodes").mkdir(parents=True)
+    csv_path = out_dir / "log.csv"
+    (out_dir / "settings.json").write_text(json.dumps(vars(args), indent=2))
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def status(state: str, it: int) -> None:
+        (out_dir / "status.json").write_text(json.dumps({"state": state, "iter": it, "iters": args.iters, "started": started}))
+
+    status("running", 0)
 
     print(f"reference policy (angle + 0.5·ang_vel > 0 → right): eval return {evaluate(reference_action):.0f} / 500")
     print(f"untrained policy: eval return {evaluate(lambda s: greedy_action(session, s)):.0f} / 500\n")
@@ -174,9 +215,11 @@ def main() -> None:
         fig, axes = plt.subplots(2, 2, figsize=(12, 7.5))
         fig.suptitle("CartPole, batch actor-critic")
 
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=cols)
-        writer.writeheader()
+    f = open(csv_path, "w", newline="")
+    writer = csv.DictWriter(f, fieldnames=cols)
+    writer.writeheader()
+    it = 0
+    try:
         for it in range(1, args.iters + 1):
             tr = session.iterate()  # collect → critic step → actor step (fully recorded)
             s = tr["summary"]
@@ -224,21 +267,35 @@ def main() -> None:
             if truth_line:
                 print(truth_line)
 
-            if args.render_every and it % args.render_every == 0:
-                print(f"     ↳ showing the current policy (most likely action) in a window …")
-                try:
-                    r = evaluate(lambda st: greedy_action(session, st), episodes=1, render=True)
-                    print(f"     ↳ it balanced for {r:.0f} steps")
-                except Exception as err:  # no display available
-                    print(f"     ↳ cannot open a window ({err}); use --render-every 0")
-                    args.render_every = 0
+            every = args.render_every or 25
+            if it == 1 or it % every == 0 or it == args.iters:
+                ep = record_episode(session, it, out_dir / "episodes")
+                print(f"     ↳ recorded the current policy playing: {ep['steps']} steps (episodes/{ep['name']}.gif)")
+                if args.render_every and it % args.render_every == 0:
+                    try:  # the same episode again, live in a window
+                        evaluate(lambda st: greedy_action(session, st), episodes=1, render=True)
+                    except Exception as err:  # no display available
+                        print(f"     ↳ cannot open a window ({err}); use --render-every 0")
+                        args.render_every = 0
+            status("running", it)
             if fig is not None and (live or it == args.iters):
                 _draw(fig, axes, rows, live)
+    except KeyboardInterrupt:
+        print("\nstopped by Ctrl-C")
+        status("stopped", it)
+    else:
+        status("finished", it)
+    finally:
+        f.close()
 
-    print(f"\nlog saved: {csv_path}")
+    print(f"\neverything saved in: {out_dir}   (web page: http://localhost:3000/terminal)")
+    if not rows:
+        return
     _diagnose(rows)
     if fig is not None:
-        png = out_dir / "latest.png"  # one image, overwritten each run
+        if not live or it < args.iters:
+            _draw(fig, axes, rows, live)
+        png = out_dir / "plot.png"
         fig.savefig(png, dpi=110)
         print(f"plot saved: {png}")
         if live:

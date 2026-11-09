@@ -167,6 +167,9 @@ export default function Compare() {
           <Link href="/learn" className="text-neutral-500 hover:text-neutral-900">
             Learn
           </Link>
+          <Link href="/terminal" className="text-neutral-500 hover:text-neutral-900">
+            Terminal run
+          </Link>
           <Link href="/" className="text-neutral-500 hover:text-neutral-900">
             Live
           </Link>
