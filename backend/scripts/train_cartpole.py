@@ -73,6 +73,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import gymnasium as gym  # noqa: E402
 
 from rl.explain import ExplainSession, LearnConfig  # noqa: E402
+from rl.ppo import VARIANTS, PPOConfig, PPOSession  # noqa: E402
+
+# The ladder: our batch actor-critic, then one more piece of PPO per rung.
+ALGOS = {
+    "batch_ac": "Batch Actor-Critic (1 gradient step per batch)",
+    "epochs": "+ 10 epochs on each batch (no clip)",
+    "clip": "+ importance ratio and clip ε = 0.2",
+    "gae": "+ GAE λ = 0.95",
+    "ppo": "PPO (2,048-step batches, minibatches of 64, advantage normalisation)",
+}
+
+
+def make_session(algo: str, args):
+    """Build the algorithm. Options left at None use the algorithm's own defaults."""
+    pick = lambda value, default: default if value is None else value  # noqa: E731
+    if algo == "batch_ac":
+        cfg = LearnConfig(env_id="CartPole-v1", seed=args.seed, batch_episodes=pick(args.batch, 5),
+                          hidden=pick(args.hidden, 8), actor_lr=pick(args.actor_lr, 0.01),
+                          critic_lr=pick(args.critic_lr, 0.03), gamma=args.gamma, optimizer=args.optimizer)
+        return ExplainSession(cfg), cfg.model_dump()
+    base = {**PPOConfig().model_dump(), **VARIANTS[algo]}
+    cfg = PPOConfig(**{**base, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, base["hidden"]),
+                       "actor_lr": pick(args.actor_lr, base["actor_lr"]), "critic_lr": pick(args.critic_lr, base["critic_lr"]),
+                       **({"batch_episodes": args.batch} if args.batch is not None and base["batch_episodes"] else {})})
+    return PPOSession(cfg), cfg.model_dump()
 from rl.logger import runs_dir  # noqa: E402
 
 
@@ -225,11 +250,14 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--iters", type=int, default=150)
-    ap.add_argument("--batch", type=int, default=5, help="episodes per batch")
-    ap.add_argument("--hidden", type=int, default=8, help="hidden units (one hidden layer)")
-    ap.add_argument("--actor-lr", type=float, default=0.01)
-    ap.add_argument("--critic-lr", type=float, default=0.03)
+    ap.add_argument("--algo", choices=[*ALGOS, "all"], default="batch_ac",
+                    help="batch_ac | epochs | clip | gae | ppo, or all of them one after another")
+    ap.add_argument("--budget", type=int, default=200_000, help="environment steps to train for (the same for every algorithm)")
+    ap.add_argument("--iters", type=int, default=None, help="optional maximum number of iterations")
+    ap.add_argument("--batch", type=int, default=None, help="episodes per batch (episode-batch algorithms)")
+    ap.add_argument("--hidden", type=int, default=None, help="hidden units (one hidden layer); default 8")
+    ap.add_argument("--actor-lr", type=float, default=None, help="default: the algorithm's own")
+    ap.add_argument("--critic-lr", type=float, default=None, help="default: the algorithm's own")
     ap.add_argument("--gamma", type=float, default=0.99)
     ap.add_argument("--optimizer", choices=["adam", "sgd"], default="adam")
     ap.add_argument("--seed", type=int, default=0)
@@ -243,19 +271,29 @@ def main() -> None:
     ap.add_argument("--quality-steps", type=int, default=10_000, help="length of the final-policy test (training stops at 500)")
     ap.add_argument("--quality-starts", type=int, default=20, help="start states in the final-policy test")
     args = ap.parse_args()
+    if args.algo == "all":  # the whole ladder, one after another, no windows
+        args.render_every, args.open = 0, False
+        for algo in ALGOS:
+            print(f"\n========== {algo}: {ALGOS[algo]} ==========")
+            train(algo, args)
+        print("\nDone. Compare them on http://localhost:3000")
+    else:
+        train(args.algo, args)
 
-    cfg = LearnConfig(env_id="CartPole-v1", seed=args.seed, batch_episodes=args.batch, hidden=args.hidden,
-                      actor_lr=args.actor_lr, critic_lr=args.critic_lr, gamma=args.gamma, optimizer=args.optimizer)
-    session = ExplainSession(cfg)
-    out_dir = runs_dir() / "cli" / "latest"  # only the latest run is kept
+
+def train(algo: str, args) -> None:
+    session, resolved = make_session(algo, args)
+    out_dir = runs_dir() / "cli" / algo  # the latest run of this algorithm
     shutil.rmtree(out_dir, ignore_errors=True)
     (out_dir / "episodes").mkdir(parents=True)
     csv_path = out_dir / "log.csv"
-    (out_dir / "settings.json").write_text(json.dumps(vars(args), indent=2))
+    (out_dir / "settings.json").write_text(json.dumps(
+        {"algo": algo, "algo_name": ALGOS[algo], "budget": args.budget, "seed": args.seed, "config": resolved}, indent=2))
     started = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    def status(state: str, it: int) -> None:
-        (out_dir / "status.json").write_text(json.dumps({"state": state, "iter": it, "iters": args.iters, "started": started}))
+    def status(state: str, it: int, steps: int = 0) -> None:
+        (out_dir / "status.json").write_text(json.dumps(
+            {"state": state, "iter": it, "env_steps": steps, "budget": args.budget, "started": started}))
 
     status("running", 0)
     record_episode(None, 0, out_dir / "episodes", name="good")  # the hand-written policy, for comparison
@@ -279,7 +317,7 @@ def main() -> None:
             print("(the plot opens when training ends; for a plot that updates DURING training: sudo apt install python3-tk)\n")
         plt.ion()
         fig, axes = plt.subplots(2, 2, figsize=(12, 7.5))
-        fig.suptitle("CartPole, batch actor-critic")
+        fig.suptitle(f"CartPole · {ALGOS[algo]}")
 
     f = open(csv_path, "w", newline="")
     writer = csv.DictWriter(f, fieldnames=cols)
@@ -288,9 +326,12 @@ def main() -> None:
     env_steps = 0  # environment steps used so far: the fair x-axis between algorithms
     completed = False
     try:
-        for it in range(1, args.iters + 1):
-            tr = session.iterate()  # collect → critic step → actor step (fully recorded)
+        last = False
+        while not last:
+            it += 1
+            tr = session.iterate()  # collect a batch → gradient step(s) → discard
             s = tr["summary"]
+            last = env_steps + s["steps"] >= args.budget or (args.iters is not None and it >= args.iters)
             p_old = np.array(tr["actor"]["probs_before"])  # π_k on the batch states
             p_new = np.array(tr["actor"]["probs_after"])  # π_k+1 on the same states
             kl = float(np.mean(np.sum(p_old * (np.log(p_old + 1e-12) - np.log(p_new + 1e-12)), axis=1)))
@@ -311,7 +352,7 @@ def main() -> None:
                    "absA": s["mean_abs_adv"], "KL": kl, "agree": agree, "p_good": p_good, "ce_good": ce_good,
                    "dir": direction, "eval": None,
                    "true_err": None, "noise": None, "V_mean": None, "Vtrue_mean": None}
-            if it % args.eval_every == 0 or it == 1 or it == args.iters:
+            if it % args.eval_every == 0 or it == 1 or last:
                 row["eval"] = evaluate(lambda st: greedy_action(session, st))
             truth_line = ""
             if args.truth_every and (it % args.truth_every == 0 or it == 1):
@@ -336,7 +377,7 @@ def main() -> None:
             if truth_line:
                 print(truth_line)
 
-            if it == 1 or it % args.record_every == 0 or it == args.iters:
+            if it == 1 or it % args.record_every == 0 or last:
                 ep = record_episode(session, it, out_dir / "episodes")
                 print(f"     ↳ recorded the current policy playing: {ep['steps']} steps (episodes/{ep['name']}.gif)")
                 if args.render_every and it % args.render_every == 0:
@@ -345,12 +386,12 @@ def main() -> None:
                     except Exception as err:  # no display available
                         print(f"     ↳ cannot open a window ({err}); use --render-every 0")
                         args.render_every = 0
-            status("running", it)
-            if fig is not None and (live or it == args.iters):
+            status("running", it, env_steps)
+            if fig is not None and (live or last):
                 _draw(fig, axes, rows, live)
     except KeyboardInterrupt:
         print("\nstopped by Ctrl-C")
-        status("stopped", it)
+        status("stopped", it, env_steps)
     else:
         completed = True
     finally:
@@ -360,7 +401,7 @@ def main() -> None:
         return
     _diagnose(rows)
     if completed:
-        status("testing", it)
+        status("testing", it, env_steps)
         torch.save({"actor": session.actor.state_dict(), "critic": session.critic.state_dict()}, out_dir / "final_weights.pt")
         print(f"\nScorecard (final policy tested for up to {args.quality_steps} steps from {args.quality_starts} start states) …")
         card = {
@@ -372,10 +413,10 @@ def main() -> None:
         }
         (out_dir / "scorecard.json").write_text(json.dumps(card))
         _print_scorecard(card)
-        status("finished", it)
-    print(f"\neverything saved in: {out_dir}   (web page: http://localhost:3000)")
+        status("finished", it, env_steps)
+    print(f"\n{ALGOS[algo]}: everything saved in {out_dir}   (web page: http://localhost:3000)")
     if fig is not None:
-        if not live or it < args.iters:
+        if not live:
             _draw(fig, axes, rows, live)
         png = out_dir / "plot.png"
         fig.savefig(png, dpi=110)

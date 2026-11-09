@@ -389,13 +389,11 @@ def learn_trace(sid: str, k: int) -> dict:
 
 
 # ----------------------------------------------------------------------------
-# Terminal run: the latest `scripts/train_cartpole.py` run, saved in runs/cli/latest/
+# Terminal runs: the latest run of each algorithm, saved by scripts/train_cartpole.py in
+# runs/cli/<algo>/ (batch_ac, epochs, clip, gae, ppo)
 # ----------------------------------------------------------------------------
 CLI_NAME_RE = re.compile(r"^(iter\d{4}|good)$")
-
-
-def _cli_dir():
-    return runs_dir() / "cli" / "latest"
+CLI_ALGO_RE = re.compile(r"^[a-z_]+$")
 
 
 def _num(v: str):
@@ -407,36 +405,62 @@ def _num(v: str):
         return v
 
 
-@app.get("/api/cli/latest")
-def cli_latest() -> dict:
-    d = _cli_dir()
-    if not (d / "settings.json").exists():
-        raise HTTPException(404, "no terminal run yet: run  uv run python scripts/train_cartpole.py")
-    rows = []
-    if (d / "log.csv").exists():
-        with open(d / "log.csv", newline="") as f:
-            rows = [{k: _num(v) for k, v in r.items()} for r in _csv.DictReader(f)]
+def _cli_dir(algo: str):
+    d = runs_dir() / "cli" / algo
+    if not CLI_ALGO_RE.match(algo) or not (d / "settings.json").exists():
+        raise HTTPException(404, f"no run for '{algo}' yet: uv run python scripts/train_cartpole.py --algo {algo}")
+    return d
+
+
+def _cli_rows(d) -> list[dict]:
+    if not (d / "log.csv").exists():
+        return []
+    with open(d / "log.csv", newline="") as f:
+        return [{k: _num(v) for k, v in r.items()} for r in _csv.DictReader(f)]
+
+
+def _cli_json(path):
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+@app.get("/api/cli/algos")
+def cli_algos() -> list[dict]:
+    """Every algorithm that has a run: status, settings, scorecard and its speed curve (for comparing)."""
+    out = []
+    for settings in sorted((runs_dir() / "cli").glob("*/settings.json")):
+        d = settings.parent
+        rows = _cli_rows(d)
+        out.append(clean({
+            "algo": d.name, "settings": json.loads(settings.read_text()), "status": _cli_json(d / "status.json") or {},
+            "scorecard": _cli_json(d / "scorecard.json"),
+            "speed": [{k: r.get(k) for k in ("iter", "env_steps", "ret", "eval")} for r in rows],
+        }))
+    return out
+
+
+@app.get("/api/cli/run/{algo}")
+def cli_run(algo: str) -> dict:
+    d = _cli_dir(algo)
     episodes = []
     for p in sorted((d / "episodes").glob("*.json")):
         ep = json.loads(p.read_text())
         episodes.append({k: ep[k] for k in ("name", "iter", "steps", "terminated")})
-    status = json.loads((d / "status.json").read_text()) if (d / "status.json").exists() else {}
-    card = json.loads((d / "scorecard.json").read_text()) if (d / "scorecard.json").exists() else None
-    return clean({"settings": json.loads((d / "settings.json").read_text()), "status": status,
-                  "rows": rows, "episodes": episodes, "scorecard": card})
+    return clean({"algo": algo, "settings": json.loads((d / "settings.json").read_text()),
+                  "status": _cli_json(d / "status.json") or {}, "rows": _cli_rows(d), "episodes": episodes,
+                  "scorecard": _cli_json(d / "scorecard.json")})
 
 
-@app.get("/api/cli/latest/episode/{name}")
-def cli_episode(name: str) -> dict:
-    p = _cli_dir() / "episodes" / f"{name}.json"
+@app.get("/api/cli/run/{algo}/episode/{name}")
+def cli_episode(algo: str, name: str) -> dict:
+    p = _cli_dir(algo) / "episodes" / f"{name}.json"
     if not CLI_NAME_RE.match(name) or not p.exists():
         raise HTTPException(404, f"no episode {name}")
     return json.loads(p.read_text())
 
 
-@app.get("/api/cli/latest/gif/{name}")
-def cli_gif(name: str):
-    p = _cli_dir() / "episodes" / f"{name}.gif"
+@app.get("/api/cli/run/{algo}/gif/{name}")
+def cli_gif(algo: str, name: str):
+    p = _cli_dir(algo) / "episodes" / f"{name}.gif"
     if not CLI_NAME_RE.match(name) or not p.exists():
         raise HTTPException(404, f"no gif {name}")
     return FileResponse(p, media_type="image/gif")

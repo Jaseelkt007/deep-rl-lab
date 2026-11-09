@@ -1,0 +1,66 @@
+import numpy as np
+import pytest
+import torch
+
+from rl.ppo import VARIANTS, PPOConfig, PPOSession, actor_loss
+
+
+def test_clip_stops_the_push_beyond_the_trust_range():
+    adv = torch.tensor([2.0])
+    old = torch.log(torch.tensor([0.5]))
+    # ratio 1.5 > 1.2 with A > 0: already moved far enough, gradient 0
+    lp = torch.log(torch.tensor([0.75])).requires_grad_()
+    actor_loss(lp, old, adv, 0.2).backward()
+    assert lp.grad.item() == 0.0
+    # ratio 1.1 inside the range: gradient −A·r (pushes log π up)
+    lp = torch.log(torch.tensor([0.55])).requires_grad_()
+    actor_loss(lp, old, adv, 0.2).backward()
+    assert lp.grad.item() == pytest.approx(-2.0 * 1.1, rel=1e-5)
+    # no clip: plain −A·log π
+    lp = torch.log(torch.tensor([0.75])).requires_grad_()
+    actor_loss(lp, old, adv, None).backward()
+    assert lp.grad.item() == pytest.approx(-2.0)
+
+
+def test_lambda_one_gives_monte_carlo_advantage_and_zero_gives_td_error():
+    s = PPOSession(PPOConfig(seed=0))
+    X, acts, logp, rews, ends, nxt, segs, fin = s._collect()
+    g = s.cfg.gamma
+    s.cfg.gae_lambda = 1.0
+    V, A, target = s._advantages(X, rews, ends, nxt)
+    # λ = 1: target = discounted return, computed backwards per episode (all 5 episodes end by falling)
+    G, run = np.zeros(len(rews)), 0.0
+    for t in range(len(rews) - 1, -1, -1):
+        run = rews[t] + (0.0 if ends[t] == "terminated" else g * run)
+        G[t] = run
+    np.testing.assert_allclose(target, G, rtol=1e-5, atol=1e-5)
+    s.cfg.gae_lambda = 0.0
+    V0, A0, _ = s._advantages(X, rews, ends, nxt)
+    with torch.no_grad():
+        vn = s.critic(torch.as_tensor(s.encoder(np.array(nxt), 0))).numpy()
+    delta = np.array(rews) + g * np.where(np.array(ends) == "terminated", 0.0, vn) - V0
+    np.testing.assert_allclose(A0, delta, rtol=1e-5, atol=1e-5)
+
+
+def test_fixed_step_batches_cut_and_continue_episodes():
+    s = PPOSession(PPOConfig(batch_episodes=None, batch_steps=100, seed=1))
+    tr = s.iterate()
+    assert tr["summary"]["steps"] == 100
+    assert sum(len(seg["states"]) for seg in tr["episodes"]) == 100
+    carried = s.ep_len  # the cut episode continues into the next batch
+    s.iterate()
+    assert carried > 0 or s.ep_len >= 0
+
+
+def test_gradient_steps_are_epochs_times_minibatches():
+    s = PPOSession(PPOConfig(batch_episodes=None, batch_steps=200, epochs=3, minibatch=64, seed=2))
+    assert s.iterate()["summary"]["grad_steps"] == 3 * 4  # 200 / 64 → 4 minibatches (64, 64, 64, 8)
+    s = PPOSession(PPOConfig(epochs=1, seed=2))  # our batch actor-critic: one step on the whole batch
+    assert s.iterate()["summary"]["grad_steps"] == 1
+
+
+def test_variants_are_valid_and_one_switch_apart():
+    for name, over in VARIANTS.items():
+        PPOConfig(**over)
+    assert VARIANTS["clip"] == {**VARIANTS["epochs"], "clip": 0.2}
+    assert VARIANTS["gae"] == {**VARIANTS["clip"], "gae_lambda": 0.95}

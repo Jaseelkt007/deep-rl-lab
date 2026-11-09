@@ -95,17 +95,20 @@ def test_learn_endpoints(client):
     assert client.post("/api/learn/nope/step").status_code == 404
 
 
-def test_cli_latest_endpoints(client, tmp_path):
+def test_cli_endpoints(client, tmp_path):
     import json as _json
 
-    d = tmp_path / "cli" / "latest" / "episodes"
+    d = tmp_path / "cli" / "ppo" / "episodes"
     d.mkdir(parents=True)
-    (d.parent / "settings.json").write_text(_json.dumps({"iters": 2}))
-    (d.parent / "status.json").write_text(_json.dumps({"state": "finished", "iter": 2, "iters": 2}))
-    (d.parent / "log.csv").write_text("iter,ret,eval\n1,15.4,9.0\n2,12.6,\n")
+    (d.parent / "settings.json").write_text(_json.dumps({"algo": "ppo", "config": {"epochs": 10}}))
+    (d.parent / "status.json").write_text(_json.dumps({"state": "finished", "iter": 2, "env_steps": 4096}))
+    (d.parent / "log.csv").write_text("iter,ret,env_steps,eval\n1,15.4,2048,9.0\n2,12.6,4096,\n")
     (d / "iter0001.json").write_text(_json.dumps({"name": "iter0001", "iter": 1, "steps": 3, "terminated": True,
                                                   "states": [[0, 0, 0, 0]] * 3, "actions": [0, 1, 0], "probs": [[0.5, 0.5]] * 3}))
-    r = client.get("/api/cli/latest").json()
-    assert r["rows"][1] == {"iter": 2.0, "ret": 12.6, "eval": None} and r["episodes"][0]["steps"] == 3
-    assert client.get("/api/cli/latest/episode/iter0001").json()["actions"] == [0, 1, 0]
-    assert client.get("/api/cli/latest/episode/..%2Fsettings").status_code == 404
+    algos = client.get("/api/cli/algos").json()
+    assert [a["algo"] for a in algos] == ["ppo"] and algos[0]["speed"][1] == {"iter": 2.0, "env_steps": 4096.0, "ret": 12.6, "eval": None}
+    r = client.get("/api/cli/run/ppo").json()
+    assert r["rows"][0]["env_steps"] == 2048.0 and r["episodes"][0]["steps"] == 3
+    assert client.get("/api/cli/run/ppo/episode/iter0001").json()["actions"] == [0, 1, 0]
+    assert client.get("/api/cli/run/ppo/episode/..%2Fsettings").status_code == 404
+    assert client.get("/api/cli/run/nope").status_code == 404
