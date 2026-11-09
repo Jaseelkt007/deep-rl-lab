@@ -1,9 +1,8 @@
 """Train CartPole with batch actor-critic from the terminal. No web server needed.
 
-    uv run python scripts/train_cartpole.py                       # 150 iterations, one log line each
-    uv run python scripts/train_cartpole.py --plot                # + live plot window, saved as PNG at the end
-    uv run python scripts/train_cartpole.py --render-every 25     # + watch the current policy play every 25 iterations
-    uv run python scripts/train_cartpole.py --help                # all options (learning rates, batch size, ...)
+    uv run python scripts/train_cartpole.py        # the one command: logs + game window every 25 iterations
+                                                   # + one plot (runs/cli/latest.png) opened at the end
+    uv run python scripts/train_cartpole.py --help # options (learning rates, batch size, --render-every 0, ...)
 
 One iteration (same code as the Learn page, rl/explain.py):
     1. the FROZEN policy plays --batch complete episodes
@@ -45,6 +44,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -130,8 +131,9 @@ def main() -> None:
     ap.add_argument("--optimizer", choices=["adam", "sgd"], default="adam")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--eval-every", type=int, default=10)
-    ap.add_argument("--render-every", type=int, default=0, help="show the current policy playing every N iterations (0 = never)")
-    ap.add_argument("--plot", action="store_true", help="live plot window (also saved as PNG)")
+    ap.add_argument("--render-every", type=int, default=25, help="show the current policy playing every N iterations (0 = never)")
+    ap.add_argument("--plot", action=argparse.BooleanOptionalAction, default=True,
+                    help="plot to runs/cli/latest.png (overwritten each run) and open it at the end")
     ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
     args = ap.parse_args()
 
@@ -160,9 +162,9 @@ def main() -> None:
 
         live = matplotlib.get_backend().lower() != "agg"
         if not live:
-            print("(no plot window available: install it with  sudo apt install python3-tk ; the plot is still saved as PNG)\n")
+            print("(the plot opens when training ends; for a plot that updates DURING training: sudo apt install python3-tk)\n")
         plt.ion()
-        fig, axes = plt.subplots(2, 3, figsize=(13, 6.5))
+        fig, axes = plt.subplots(2, 2, figsize=(12, 7.5))
         fig.suptitle("CartPole, batch actor-critic")
 
     with open(csv_path, "w", newline="") as f:
@@ -220,16 +222,19 @@ def main() -> None:
                 _draw(fig, axes, rows, live)
 
     print(f"\nlog saved: {csv_path}")
+    _diagnose(rows)
     if fig is not None:
-        png = csv_path.with_suffix(".png")
+        png = out_dir / "latest.png"  # one image, overwritten each run
         fig.savefig(png, dpi=110)
-        print(f"plot saved: {png}   (open it from Windows:  explorer.exe \"$(wslpath -w {png})\")")
+        print(f"plot saved: {png}")
         if live:
             import matplotlib.pyplot as plt
 
             plt.ioff()
             plt.show()
-    _diagnose(rows)
+        elif shutil.which("explorer.exe"):  # WSL: open it in the Windows image viewer
+            win_path = subprocess.run(["wslpath", "-w", str(png)], capture_output=True, text=True).stdout.strip()
+            subprocess.run(["explorer.exe", win_path], check=False)
 
 
 def _draw(fig, axes, rows: list[dict], live: bool) -> None:
@@ -237,30 +242,34 @@ def _draw(fig, axes, rows: list[dict], live: bool) -> None:
 
     it = [r["iter"] for r in rows]
     ev_it = [r["iter"] for r in rows if r["eval"] is not None]
+    t_it = [r["iter"] for r in rows if r["true_err"] is not None]
     panels = [
-        (axes[0, 0], "return", [("batch return", [r["ret"] for r in rows], it), ("eval (greedy)", [r["eval"] for r in rows if r["eval"] is not None], ev_it)], False),
-        (axes[0, 1], "critic loss ½(G−V)²", [("before step", [r["Lv"] for r in rows], it), ("after step", [r["Lv_after"] for r in rows], it)], True),
-        (axes[0, 2], "actor loss −A·log π", [("actor loss", [r["Lpi"] for r in rows], it)], False),
-        (axes[1, 0], "critic quality (scale-free)", [
-            ("relative error (batch)", [r["rel"] for r in rows], it),
-            ("corr(V, G)", [r["corr"] for r in rows], it),
-            ("TRUE error vs V^π", [r["true_err"] for r in rows if r["true_err"] is not None], [r["iter"] for r in rows if r["true_err"] is not None]),
-            ("noise floor", [r["noise"] for r in rows if r["noise"] is not None], [r["iter"] for r in rows if r["noise"] is not None]),
-        ], False),
-        (axes[1, 1], "policy: entropy and agreement with reference", [("entropy", [r["H"] for r in rows], it), ("agree with reference", [r["agree"] for r in rows], it)], False),
-        (axes[1, 2], "policy change per update KL(π_old‖π_new)", [("KL", [r["KL"] for r in rows], it)], True),
+        (axes[0, 0], "1. Is the agent learning?  episode length (500 = perfect)", [
+            ("batch: mean episode length", [r["ret"] for r in rows], it),
+            ("eval: most likely action, 10 fixed starts", [r["eval"] for r in rows if r["eval"] is not None], ev_it)], False),
+        (axes[0, 1], "2. Is the policy right?  agreement with the good policy", [
+            ("agreement with 'angle + 0.5·ang_vel > 0'", [r["agree"] for r in rows], it),
+            ("entropy (0.69 = coin flip, 0 = always same)", [r["H"] for r in rows], it)], False),
+        (axes[1, 0], "3. Critic loss ½(G−V)²  (grows with the returns)", [
+            ("critic loss on the new batch", [r["Lv"] for r in rows], it)], True),
+        (axes[1, 1], "4. Is the critic learning?  error as a fraction of the value", [
+            ("TRUE error: |V − real average return|", [r["true_err"] for r in rows if r["true_err"] is not None], t_it),
+            ("noise floor (no critic can go below)", [r["noise"] for r in rows if r["noise"] is not None], t_it),
+            ("error on the batch (rel)", [r["rel"] for r in rows], it)], False),
     ]
     for ax, title, series, log in panels:
         ax.clear()
         for label, ys, xs in series:
             ax.plot(xs, ys, label=label, lw=1.5)
         ax.set_title(title, fontsize=10)
+        ax.set_xlabel("iteration (one batch + one update)", fontsize=8)
         if log:
             ax.set_yscale("log")
         ax.grid(alpha=0.3)
         if len(series) > 1:
             ax.legend(fontsize=8)
-    axes[1, 0].set_ylim(-0.2, 1.2)
+    axes[0, 1].set_ylim(0, 1)
+    axes[1, 1].set_ylim(0, 1.2)
     fig.tight_layout()
     if live:
         plt.pause(0.001)
