@@ -1,8 +1,8 @@
 # Deep RL playground
 
-A small playground for understanding how actor-critic learns, by watching it. It currently focuses on **CartPole-v1** with **batch on-policy actor-critic**. You train in the terminal; one web page explains the problem and the algorithm and shows the latest run.
+A small playground for understanding how actor-critic learns, by watching it. It currently focuses on **CartPole-v1** with **batch actor-critic** (on-policy, Monte Carlo returns); MountainCar-v0 is next. You train in the terminal and watch the run in the web app.
 
-![CartPole page](docs/img/cartpole-page.png)
+![Run page](docs/img/cartpole-page.png)
 
 ## Quick start
 
@@ -26,25 +26,20 @@ Then open **http://localhost:3000** (on WSL, in the Windows browser). The page r
 
 Useful options: `--iters 300`, `--batch 10`, `--actor-lr 0.005`, `--critic-lr 0.05`, `--render-every 0` (no window). `--help` lists them all.
 
-## The page
+## The web app
 
-1. **The problem**: the 4 state numbers (meaning, unit, limits, how they are scaled), the actions, the reward, and how an episode ends.
-2. **How it learns**:
-   - collect a batch with the frozen policy;
-   - the critic regresses the return G_t = r_t + γ·G_(t+1);
-   - the actor's loss is −A·log π(a|s), with A = G − V;
-   - the objective is J = E[Σ γ^t r_t].
-
-   [/learn](http://localhost:3000/learn) steps through one update weight by weight.
-3. **Terminal run**: the command, status, and settings of the latest run.
-4. **Is the agent learning?**:
-   - episode length (batch and eval);
-   - P(good action), agreement with a known good policy (push right if angle + 0.5·angular velocity > 0, which scores 500), and entropy.
-5. **Is the critic learning?**:
-   - the raw critic loss, which grows with the returns;
-   - the scale-free critic error: the true error against Monte Carlo returns, next to the noise floor.
-6. **Recorded episodes**: the policy every 10 iterations (and the good policy), replayed with the state values and a "how close to failing" chart.
-7. **Logs**: the numbers the terminal printed.
+- **Run** (`/`): the latest terminal run.
+  - The algorithm, status and settings, and a button that copies the train command.
+  - Recorded episodes: the policy every 10 iterations, the final one, and a hand-written good policy, replayed with the state values.
+  - The environment and the update rule at a glance.
+  - Four charts:
+    - **Agent**: episode length.
+    - **Actor**: is the policy right? P(good action), agreement, entropy.
+    - **Critic**: the raw loss.
+    - **Critic**: the scale-free error against the true value.
+  - The log.
+- **Learn** (`/learn`): one update, step by step: collect, critic, returns, advantage, the critic step and the actor step weight by weight.
+- **Compare** (`/compare`): overlay saved runs of the experiments.
 
 ## The algorithm (batch on-policy actor-critic)
 
@@ -96,7 +91,7 @@ backend/
   server.py             FastAPI: latest terminal run (/api/cli/latest), Learn page API, older run API
   scripts/              train_cartpole.py, play_cartpole.py, check_cartpole.py, experiments.py, run_batch.py
   tests/                pytest
-frontend/               Next.js: / (CartPole page) and /learn (one update, step by step)
+frontend/               Next.js: / (Run), /learn (one update, step by step), /compare
 docs/experiments/       pre-registered experiments and their results
 runs/                   saved runs (git-ignored); runs/cli/latest/ = the latest terminal run
 ```

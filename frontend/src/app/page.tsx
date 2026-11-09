@@ -2,9 +2,9 @@
 
 import dynamic from "next/dynamic";
 
-// Everything draws in the browser (canvas, charts): render client-side only.
-const CartPolePage = dynamic(() => import("@/components/CartPolePage"), { ssr: false });
+// The Run page: the latest training run. Rendered in the browser only (canvas, charts).
+const RunPage = dynamic(() => import("@/components/RunPage"), { ssr: false });
 
 export default function Home() {
-  return <CartPolePage />;
+  return <RunPage />;
 }

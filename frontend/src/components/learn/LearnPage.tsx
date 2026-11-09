@@ -1,11 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { C } from "@/lib/colors";
 import { fmt } from "@/lib/math";
 import type { Describe, LearnConfig, Summary, Trace } from "@/lib/learn";
 import { learnApi } from "@/lib/learn";
+import NavBar from "../NavBar";
 import UChart from "../UChart";
 import { ActorStepStage, AdvantageStage, Box, CollectStage, CriticOutStage, CriticStepStage, NetworksStage, NextStage, ProblemStage, ReturnsStage } from "./Stages";
 
@@ -171,12 +171,10 @@ export default function LearnPage() {
   const key = stages[stage]?.key;
   return (
     <div className="min-h-screen bg-[#fafaf9]">
-      <header className="sticky top-0 z-20 flex items-center gap-4 border-b border-neutral-200 bg-white/90 px-4 py-2 backdrop-blur">
-        <h1 className="text-[14px] font-semibold text-neutral-900">One update, step by step</h1>
-        <Link href="/" className="text-[12px] text-[#2a78d6] hover:underline">
-          ← back to CartPole
-        </Link>
-        <div className="ml-auto flex items-center gap-1 rounded-md bg-neutral-100 p-0.5 text-[12px]">
+      <NavBar
+        active="learn"
+        right={
+        <div className="flex items-center gap-1 rounded-md bg-neutral-100 p-0.5 text-[12px]">
           {(["CartPole-v1", "MountainCar-v0"] as const).map((env) => (
             <button
               key={env}
@@ -191,7 +189,8 @@ export default function LearnPage() {
             </button>
           ))}
         </div>
-      </header>
+        }
+      />
 
       <div className="mx-auto max-w-[1400px] space-y-3 p-3">
         <Box>
