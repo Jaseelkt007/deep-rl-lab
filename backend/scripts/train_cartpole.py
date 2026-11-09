@@ -104,27 +104,31 @@ def evaluate(policy, episodes: int = 10, render: bool = False) -> float:
 
 
 @torch.no_grad()
-def record_episode(session: ExplainSession, it: int, folder: Path) -> dict:
-    """Play one episode with the current policy (most likely action) from a fixed start state and
-    save it: trajectory as JSON (the web page replays it) and frames as a GIF."""
+def record_episode(session: ExplainSession | None, it: int, folder: Path, name: str | None = None) -> dict:
+    """Play one episode from a fixed start state and save it: trajectory as JSON (the web page
+    replays it) and frames as a GIF. session = None plays the hand-written good policy."""
     from PIL import Image
 
     env = gym.make("CartPole-v1", render_mode="rgb_array")
     obs, _ = env.reset(seed=10_000)  # the same start as the first eval episode
     states, actions, probs, frames = [], [], [], []
     while True:
-        p = F.softmax(session.actor(torch.as_tensor(session.encoder(np.asarray(obs), 0))), -1)
-        a = int(p.argmax())
+        if session is None:  # the good policy: certain of its action
+            a = reference_action(obs)
+            p = [1.0 - a, float(a)]
+        else:  # the agent's policy, always taking its most likely action
+            pt = F.softmax(session.actor(torch.as_tensor(session.encoder(np.asarray(obs), 0))), -1)
+            a, p = int(pt.argmax()), pt.tolist()
         states.append(np.asarray(obs, dtype=float).tolist())
         actions.append(a)
-        probs.append(p.tolist())
+        probs.append(p)
         if len(states) % 2 == 1:  # every 2nd frame keeps the GIF small
             frames.append(Image.fromarray(env.render()).resize((300, 200)))
         obs, _, term, trunc, _ = env.step(a)
         if term or trunc:
             break
     env.close()
-    name = f"iter{it:04d}"
+    name = name or f"iter{it:04d}"
     info = {"name": name, "iter": it, "steps": len(actions), "terminated": bool(term)}
     (folder / f"{name}.json").write_text(json.dumps({**info, "states": states, "actions": actions, "probs": probs,
                                                     "final_state": np.asarray(obs, dtype=float).tolist()}))
@@ -193,6 +197,7 @@ def main() -> None:
         (out_dir / "status.json").write_text(json.dumps({"state": state, "iter": it, "iters": args.iters, "started": started}))
 
     status("running", 0)
+    record_episode(None, 0, out_dir / "episodes", name="good")  # the hand-written policy, for comparison
 
     print(f"reference policy (angle + 0.5·ang_vel > 0 → right): eval return {evaluate(reference_action):.0f} / 500")
     print(f"untrained policy: eval return {evaluate(lambda s: greedy_action(session, s)):.0f} / 500\n")

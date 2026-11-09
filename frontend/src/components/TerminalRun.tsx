@@ -87,8 +87,14 @@ function Player({ ep }: { ep: Episode }) {
         </a>
       </div>
       <div className="mt-1 text-[11px] tabular-nums text-neutral-500">
-        angle {fmt(ep.states[i][2], 3)} rad · angular velocity {fmt(ep.states[i][3], 3)} · the good policy would push{" "}
-        {ep.states[i][2] + 0.5 * ep.states[i][3] > 0 ? "right" : "left"}, the agent pushes {ACTIONS[ep.actions[i]]}
+        angle {fmt(ep.states[i][2], 3)} rad · angular velocity {fmt(ep.states[i][3], 3)} ·{" "}
+        {ep.name === "good" ? (
+          <>the good policy pushes {ACTIONS[ep.actions[i]]}</>
+        ) : (
+          <>
+            the good policy would push {ep.states[i][2] + 0.5 * ep.states[i][3] > 0 ? "right" : "left"}, the agent pushes {ACTIONS[ep.actions[i]]}
+          </>
+        )}
       </div>
     </div>
   );
@@ -137,7 +143,10 @@ export default function TerminalRun() {
     };
   }, []);
 
-  const current = sel ?? data?.episodes.at(-1)?.name ?? null;
+  const learned = (data?.episodes ?? []).filter((e) => e.name !== "good");
+  const good = data?.episodes.find((e) => e.name === "good");
+  const finalIter = data?.status.state !== "running" ? learned.at(-1)?.iter : undefined;
+  const current = sel ?? learned.at(-1)?.name ?? null;
   useEffect(() => {
     if (!current) return;
     let alive = true;
@@ -240,17 +249,34 @@ export default function TerminalRun() {
         )}
 
         {data && data.episodes.length > 0 && (
-          <Panel title="Recorded episodes: the policy at that iteration, always taking its most likely action" help="Saved at iteration 1, every 25 iterations and at the end, from the same start state, so you can compare how the policy improved.">
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {data.episodes.map((e) => (
-                <button
-                  key={e.name}
-                  onClick={() => setSel(e.name)}
-                  className={`rounded border px-2 py-0.5 text-[12px] tabular-nums ${e.name === current ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300 bg-white"}`}
-                >
-                  iteration {e.iter}: {e.steps} steps
-                </button>
-              ))}
+          <Panel
+            title="Recorded episodes: the policy at that iteration, always taking its most likely action"
+            help="Saved at iteration 1, every 25 iterations and at the end (the final policy), all from the same start state, so you can compare how the policy improved. 'Good policy' is the hand-written rule (angle + 0.5·angular velocity > 0 → right) on the same start, for comparison."
+          >
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              {learned.map((e) => {
+                const isFinal = e.iter === finalIter;
+                return (
+                  <button
+                    key={e.name}
+                    onClick={() => setSel(e.name)}
+                    className={`rounded border px-2 py-0.5 text-[12px] tabular-nums ${e.name === current ? "border-neutral-900 bg-neutral-900 text-white" : isFinal ? "border-[#2a78d6] bg-white text-[#2a78d6]" : "border-neutral-300 bg-white"}`}
+                  >
+                    {isFinal ? `final policy (iteration ${e.iter})` : `iteration ${e.iter}`}: {e.steps} steps
+                  </button>
+                );
+              })}
+              {good && (
+                <>
+                  <span className="mx-1 text-neutral-300">|</span>
+                  <button
+                    onClick={() => setSel(good.name)}
+                    className={`rounded border px-2 py-0.5 text-[12px] tabular-nums ${good.name === current ? "border-[#1baf7a] bg-[#1baf7a] text-white" : "border-[#1baf7a] bg-white text-[#0b7a52]"}`}
+                  >
+                    good policy (hand-written): {good.steps} steps
+                  </button>
+                </>
+              )}
             </div>
             {ep && ep.name === current && <Player key={ep.name} ep={ep} />}
           </Panel>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { ACTION_COLORS, ACTION_GLYPH, C } from "@/lib/colors";
 import type { EnvId, StepRec } from "@/lib/types";
 
@@ -152,7 +152,7 @@ export default function EnvView({
   const ref = useRef<HTMLCanvasElement>(null);
   const actionName = step ? actionNames[step.a] : null;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const cv = ref.current;
     if (!cv) return;
     const dpr = window.devicePixelRatio || 1;

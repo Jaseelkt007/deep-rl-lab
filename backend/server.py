@@ -391,7 +391,7 @@ def learn_trace(sid: str, k: int) -> dict:
 # ----------------------------------------------------------------------------
 # Terminal run: the latest `scripts/train_cartpole.py` run, saved in runs/cli/latest/
 # ----------------------------------------------------------------------------
-CLI_NAME_RE = re.compile(r"^iter\d{4}$")
+CLI_NAME_RE = re.compile(r"^(iter\d{4}|good)$")
 
 
 def _cli_dir():
@@ -417,7 +417,7 @@ def cli_latest() -> dict:
         with open(d / "log.csv", newline="") as f:
             rows = [{k: _num(v) for k, v in r.items()} for r in _csv.DictReader(f)]
     episodes = []
-    for p in sorted((d / "episodes").glob("iter*.json")):
+    for p in sorted((d / "episodes").glob("*.json")):
         ep = json.loads(p.read_text())
         episodes.append({k: ep[k] for k in ("name", "iter", "steps", "terminated")})
     status = json.loads((d / "status.json").read_text()) if (d / "status.json").exists() else {}
