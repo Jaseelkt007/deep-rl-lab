@@ -7,7 +7,8 @@
 Everything of the LATEST run is saved in runs/cli/latest/ (cleared when a new run starts):
     log.csv, settings.json, status.json, plot.png,
     episodes/iterNNNN.json + .gif   the current policy playing one episode at iteration 1, every
-                                    --render-every iterations and at the end (JSON = for the web page)
+                                    --record-every iterations and at the end (JSON = for the web page)
+    episodes/good.json + .gif       the hand-written good policy on the same start, for comparison
 The web page http://localhost:3000/terminal shows it (live while training).
 
 One iteration (same code as the Learn page, rl/explain.py):
@@ -181,6 +182,8 @@ def main() -> None:
     ap.add_argument("--plot", action=argparse.BooleanOptionalAction, default=True,
                     help="plot to runs/cli/latest/plot.png and open it at the end")
     ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
+    ap.add_argument("--record-every", type=int, default=10, help="save one episode of the current policy every N iterations")
+    ap.add_argument("--open", action=argparse.BooleanOptionalAction, default=True, help="open the plot at the end")
     args = ap.parse_args()
 
     cfg = LearnConfig(env_id="CartPole-v1", seed=args.seed, batch_episodes=args.batch, hidden=args.hidden,
@@ -272,8 +275,7 @@ def main() -> None:
             if truth_line:
                 print(truth_line)
 
-            every = args.render_every or 25
-            if it == 1 or it % every == 0 or it == args.iters:
+            if it == 1 or it % args.record_every == 0 or it == args.iters:
                 ep = record_episode(session, it, out_dir / "episodes")
                 print(f"     ↳ recorded the current policy playing: {ep['steps']} steps (episodes/{ep['name']}.gif)")
                 if args.render_every and it % args.render_every == 0:
@@ -308,7 +310,7 @@ def main() -> None:
 
             plt.ioff()
             plt.show()
-        elif shutil.which("explorer.exe"):  # WSL: open it in the Windows image viewer
+        elif args.open and shutil.which("explorer.exe"):  # WSL: open it in the Windows image viewer
             win_path = subprocess.run(["wslpath", "-w", str(png)], capture_output=True, text=True).stdout.strip()
             subprocess.run(["explorer.exe", win_path], check=False)
 
