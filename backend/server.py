@@ -433,7 +433,7 @@ def cli_algos() -> list[dict]:
         out.append(clean({
             "algo": d.name, "settings": json.loads(settings.read_text()), "status": _cli_json(d / "status.json") or {},
             "scorecard": _cli_json(d / "scorecard.json"),
-            "speed": [{k: r.get(k) for k in ("iter", "env_steps", "ret", "eval")} for r in rows],
+            "speed": [{k: r.get(k) for k in ("iter", "env_steps", "ret", "eval", "KL", "clip_frac")} for r in rows],
         }))
     return out
 

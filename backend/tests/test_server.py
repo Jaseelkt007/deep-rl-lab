@@ -106,7 +106,8 @@ def test_cli_endpoints(client, tmp_path):
     (d / "iter0001.json").write_text(_json.dumps({"name": "iter0001", "iter": 1, "steps": 3, "terminated": True,
                                                   "states": [[0, 0, 0, 0]] * 3, "actions": [0, 1, 0], "probs": [[0.5, 0.5]] * 3}))
     algos = client.get("/api/cli/algos").json()
-    assert [a["algo"] for a in algos] == ["ppo"] and algos[0]["speed"][1] == {"iter": 2.0, "env_steps": 4096.0, "ret": 12.6, "eval": None}
+    assert [a["algo"] for a in algos] == ["ppo"] and algos[0]["speed"][1] == {"iter": 2.0, "env_steps": 4096.0, "ret": 12.6, "eval": None,
+                                                                         "KL": None, "clip_frac": None}
     r = client.get("/api/cli/run/ppo").json()
     assert r["rows"][0]["env_steps"] == 2048.0 and r["episodes"][0]["steps"] == 3
     assert client.get("/api/cli/run/ppo/episode/iter0001").json()["actions"] == [0, 1, 0]

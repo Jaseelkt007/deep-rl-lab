@@ -1,17 +1,26 @@
-"""Train CartPole with batch actor-critic from the terminal. No web server needed.
+"""Train CartPole from the terminal: batch actor-critic, and the ladder from it to PPO. No web server needed.
 
-    uv run python scripts/train_cartpole.py        # the one command: logs + game window every 25 iterations
-                                                   # + one plot opened at the end
-    uv run python scripts/train_cartpole.py --help # options (learning rates, batch size, --render-every 0, ...)
+    uv run python scripts/train_cartpole.py --algo batch_ac   # logs + game window every 25 iterations
+                                                              # + one plot opened at the end
+    uv run python scripts/train_cartpole.py --algo all --render-every 0   # all 5, one after another
+    uv run python scripts/train_cartpole.py --help            # options (budget, learning rates, ...)
 
-Everything of the LATEST run is saved in runs/cli/latest/ (cleared when a new run starts):
-    log.csv, settings.json, status.json, plot.png,
+--algo (each adds one thing to the one before; rl/ppo.py):
+    batch_ac  5 episodes → 1 gradient step → throw away (rl/explain.py)
+    epochs    + 10 epochs: 10 gradient steps on the same batch
+    clip      + importance ratio r = π/π_old, loss −min(r·A, clip(r, 1−ε, 1+ε)·A), ε = 0.2
+    gae       + GAE λ = 0.95: A from the critic's one-step errors δ instead of G − V
+    ppo       + 2,048-step batches, minibatches of 64, normalised advantages, lr 1e-3 / 3e-3
+Every algorithm trains for the same --budget of environment steps (default 200,000).
+
+The LATEST run of each algorithm is saved in runs/cli/<algo>/ (cleared when that algorithm runs again):
+    log.csv, settings.json, status.json, plot.png, scorecard.json, final_weights.pt,
     episodes/iterNNNN.json + .gif   the current policy playing one episode at iteration 1, every
                                     --record-every iterations and at the end (JSON = for the web page)
     episodes/good.json + .gif       the hand-written good policy on the same start, for comparison
-The web page http://localhost:3000/terminal shows it (live while training).
+The web page http://localhost:3000 shows and compares them (live while training).
 
-One iteration (same code as the Learn page, rl/explain.py):
+One batch_ac iteration (same code as the Learn page, rl/explain.py):
     1. the FROZEN policy plays --batch complete episodes
     2. critic target per step: the discounted return that actually followed,
            G_t = r_t + γ r_t+1 + γ² r_t+2 + …   (0 after the pole falls, V(s_T) after the 500-step limit)
@@ -27,6 +36,7 @@ Log columns:
     EV      critic explained variance on the batch: 1 = V predicts G, 0 = no better than a constant
     |A|     mean |advantage|: the size of the actor's teaching signal
     KL      how much this update changed the policy: mean KL(π_old ‖ π_new) over the batch states
+    clip_frac  share of batch steps where π(a|s) moved by more than ±20 % in this update (the clip's limit)
     agree   % of batch states where the policy's most likely action = the reference policy's action
     eval    every --eval-every iterations: return of the current policy, always taking its most likely
             action, on 10 fixed start states (500 = perfect)
@@ -264,7 +274,7 @@ def main() -> None:
     ap.add_argument("--eval-every", type=int, default=10)
     ap.add_argument("--render-every", type=int, default=25, help="show the current policy playing every N iterations (0 = never)")
     ap.add_argument("--plot", action=argparse.BooleanOptionalAction, default=True,
-                    help="plot to runs/cli/latest/plot.png and open it at the end")
+                    help="plot to runs/cli/<algo>/plot.png and open it at the end")
     ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
     ap.add_argument("--record-every", type=int, default=10, help="save one episode of the current policy every N iterations")
     ap.add_argument("--open", action=argparse.BooleanOptionalAction, default=True, help="open the plot at the end")
@@ -300,7 +310,7 @@ def train(algo: str, args) -> None:
 
     print(f"reference policy (angle + 0.5·ang_vel > 0 → right): eval return {evaluate(reference_action):.0f} / 500")
     print(f"untrained policy: eval return {evaluate(lambda s: greedy_action(session, s)):.0f} / 500\n")
-    cols = ["iter", "ret", "env_steps", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "agree", "p_good",
+    cols = ["iter", "ret", "env_steps", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "clip_frac", "agree", "p_good",
             "ce_good", "dir", "eval", "true_err", "noise", "V_mean", "Vtrue_mean"]
     print(f"{'iter':>4} {'ret':>6} {'Lv (before → after)':>22} {'rel':>5} {'corr':>5} {'Lpi':>8} {'H':>5} {'EV':>6} "
           f"{'|A|':>6} {'KL':>8} {'agree':>6} {'p_good':>6} {'ce_good':>7} {'dir':>5} {'eval':>5}")
@@ -341,6 +351,7 @@ def train(algo: str, args) -> None:
             p_good, ce_good = float(good.mean()), float(np.mean(-np.log(good + 1e-12)))
             adv = np.array(tr["advantages"])
             dlogp = np.array(tr["actor"]["logp_after"]) - np.array(tr["actor"]["logp_before"])
+            clip_frac = float(np.mean(np.abs(np.exp(dlogp) - 1) > 0.2))  # share of steps where π(a|s) moved > ±20 %
             direction = float(np.corrcoef(adv, dlogp)[0, 1]) if adv.std() > 1e-9 and dlogp.std() > 1e-12 else float("nan")
             ev = s["ev"] if s["ev"] is not None else float("nan")
             G, V = np.array(tr["returns"]), np.array(tr["values"])  # V: critic BEFORE its step, on fresh data
@@ -349,7 +360,7 @@ def train(algo: str, args) -> None:
             env_steps += s["steps"]
             row = {"iter": it, "ret": s["mean_return"], "env_steps": env_steps, "Lv": s["critic_loss"], "Lv_after": s["critic_loss_after"],
                    "rel": rel, "corr": corr, "Lpi": s["actor_loss"], "H": s["entropy"], "EV": ev,
-                   "absA": s["mean_abs_adv"], "KL": kl, "agree": agree, "p_good": p_good, "ce_good": ce_good,
+                   "absA": s["mean_abs_adv"], "KL": kl, "clip_frac": clip_frac, "agree": agree, "p_good": p_good, "ce_good": ce_good,
                    "dir": direction, "eval": None,
                    "true_err": None, "noise": None, "V_mean": None, "Vtrue_mean": None}
             if it % args.eval_every == 0 or it == 1 or last:
