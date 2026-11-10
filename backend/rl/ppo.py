@@ -120,6 +120,7 @@ class PPOSession:
         self.env.action_space.seed(cfg.seed)
         self.obs, _ = self.env.reset(seed=cfg.seed)
         self.ep_len = 0  # steps of the episode in progress (it may continue into the next batch)
+        self.ep_ret = 0.0  # its return so far, with the OFFICIAL reward (no shaping bonus)
         self.k = 0
         self.last_mean_return = 0.0
 
@@ -132,13 +133,14 @@ class PPOSession:
         # a segment = one episode's steps inside this batch; `fresh`: it started with a reset (not cut off
         # from the previous batch), `end`: how it ended (terminated / truncated / cut)
         segments, seg = [], {"states": [], "actions": [], "probs": [], "fresh": self.ep_len == 0}
-        finished_lengths, finished_terminated = [], []
+        finished_lengths, finished_terminated, finished_returns = [], [], []
         n_done_episodes = 0
         while True:
             x = torch.as_tensor(self.encoder(self.obs, 0))
             p = F.softmax(self.actor(x), -1)
             a = int(torch.multinomial(p, 1, generator=self.gen))
-            obs2, r, term, trunc, _ = self.env.step(a)
+            obs2, r, term, trunc, info = self.env.step(a)
+            self.ep_ret += float(info.get("r_env", r))  # shaping wrappers keep the official reward in r_env
             X.append(x)
             acts.append(a)
             logp_old.append(float(torch.log(p[a])))
@@ -152,6 +154,7 @@ class PPOSession:
             if end:
                 finished_lengths.append(self.ep_len)
                 finished_terminated.append(end == "terminated")
+                finished_returns.append(self.ep_ret)
                 n_done_episodes += 1
                 self.ep_len = 0
                 self.obs, _ = self.env.reset()
@@ -164,11 +167,15 @@ class PPOSession:
             ends.append(end)
             if end:
                 seg["end"] = end
+                seg["ret"] = self.ep_ret  # the whole episode's return if the segment is `fresh`
                 segments.append(seg)
                 seg = {"states": [], "actions": [], "probs": [], "fresh": True}
+                if end != "cut":  # the episode is over; a cut one continues (with its return so far)
+                    self.ep_ret = 0.0
             if full:
                 break
         self._finished_terminated = finished_terminated
+        self._finished_returns = finished_returns
         return X, acts, logp_old, rews, ends, next_obs, segments, finished_lengths
 
     # ------------------------------------------------------------------ advantages
@@ -253,6 +260,7 @@ class PPOSession:
             "entropy": entropy, "ev": explained_variance(V.tolist(), target.tolist()),
             "mean_abs_adv": float(np.abs(A).mean()), "grad_steps": steps, "clip_frac": clip_frac,
             "finished_lengths": finished, "finished_terminated": self._finished_terminated,
+            "finished_returns": self._finished_returns,
             "per_epoch": per_epoch,
         }
         return {
