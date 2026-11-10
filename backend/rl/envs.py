@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import gymnasium as gym
 import numpy as np
 
+from . import double_cartpole  # noqa: F401  (registers DoubleCartPole-v0 with gymnasium)
 from .config import RunConfig
 
 # MountainCar-v0 physics constants (gymnasium/envs/classic_control/mountain_car.py)
@@ -19,6 +20,7 @@ MC_FORCE = 0.001
 MC_GRAVITY = 0.0025
 MC_MAX_SPEED = 0.07
 CP_THETA_LIMIT = 12 * 2 * math.pi / 360  # pole falls beyond ±12°
+DCP_LIMIT = math.radians(15)  # double cart-pole: each stick fails beyond ±15° from vertical
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,19 @@ ENV_INFO: dict[str, EnvInfo] = {
         phase_dims=(2, 3),
         phase_ranges=((-CP_THETA_LIMIT, CP_THETA_LIMIT), (-2.0, 2.0)),
         phase_base=(0.0, 0.0, 0.0, 0.0),
+        official_max_steps=500,
+    ),
+    "DoubleCartPole-v0": EnvInfo(
+        # Angles: their failure limits (θ1 ±15°; φ = θ2 − θ1 can reach ±30° before a stick
+        # fails). Velocities: what random pushes reach (99th percentile ≈ 1.1, 3.2, 4.9).
+        obs_low=np.array([-2.4, -3.0, -DCP_LIMIT, -3.5, -2 * DCP_LIMIT, -5.0]),
+        obs_high=np.array([2.4, 3.0, DCP_LIMIT, 3.5, 2 * DCP_LIMIT, 5.0]),
+        obs_names=("cart position", "cart velocity", "lower stick angle", "lower stick angular velocity",
+                   "angle between sticks", "angle between sticks, rate"),
+        action_names=("left", "right"),
+        phase_dims=(2, 4),
+        phase_ranges=((-DCP_LIMIT, DCP_LIMIT), (-2 * DCP_LIMIT, 2 * DCP_LIMIT)),
+        phase_base=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
         official_max_steps=500,
     ),
 }

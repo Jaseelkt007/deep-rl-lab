@@ -33,9 +33,9 @@ from .networks import Actor, Critic
 
 
 class LearnConfig(BaseModel):
-    env_id: Literal["MountainCar-v0", "CartPole-v1"] = "CartPole-v1"
+    env_id: Literal["MountainCar-v0", "CartPole-v1", "DoubleCartPole-v0"] = "CartPole-v1"
     seed: int = 0
-    batch_episodes: int | None = Field(None, ge=1, le=50)  # None: 5 for CartPole, 2 for MountainCar
+    batch_episodes: int | None = Field(None, ge=1, le=50)  # None: 2 for MountainCar, else 5
     hidden: int = Field(8, ge=2, le=64)  # ONE hidden layer, small enough to draw every weight
     optimizer: Literal["adam", "sgd"] = "adam"
     actor_lr: float = Field(0.01, gt=0)
@@ -45,7 +45,7 @@ class LearnConfig(BaseModel):
     grid: int = Field(25, ge=5, le=60)
 
     def n_episodes(self) -> int:
-        return self.batch_episodes or (5 if self.env_id == "CartPole-v1" else 2)
+        return self.batch_episodes or (2 if self.env_id == "MountainCar-v0" else 5)
 
 
 def _params(net) -> dict[str, torch.Tensor]:

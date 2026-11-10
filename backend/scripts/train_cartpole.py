@@ -1,9 +1,11 @@
-"""Train CartPole from the terminal: batch actor-critic, and the ladder from it to PPO. No web server needed.
+"""Train CartPole (or the double cart-pole) from the terminal: batch actor-critic, and the ladder from it
+to PPO. No web server needed.
 
     uv run python scripts/train_cartpole.py --algo batch_ac   # logs + game window every 25 iterations
                                                               # + one plot opened at the end
     uv run python scripts/train_cartpole.py --algo all --render-every 0   # all 5, one after another
     uv run python scripts/train_cartpole.py --help            # options (budget, learning rates, ...)
+    uv run python scripts/train_cartpole.py --env double_cartpole --algo ppo   # two sticks (rl/double_cartpole.py)
 
 --algo (each adds one thing to the one before; rl/ppo.py):
     batch_ac  5 episodes → 1 gradient step → throw away (rl/explain.py)
@@ -14,7 +16,8 @@
     ppo       + 2,048-step batches, minibatches of 64, normalised advantages, lr 1e-3 / 3e-3
 Every algorithm trains for the same --budget of environment steps (default 200,000).
 
-The LATEST run of each algorithm is saved in runs/cli/<algo>/ (cleared when that algorithm runs again):
+The LATEST run of each algorithm is saved in runs/cli/<algo>/ (double cart-pole: runs/double_cartpole/<algo>/),
+cleared when that algorithm runs again:
     log.csv, settings.json, status.json, plot.png, scorecard.json, final_weights.pt,
     episodes/iterNNNN.json + .gif   the current policy playing one episode at iteration 1, every
                                     --record-every iterations and at the end (JSON = for the web page)
@@ -23,7 +26,8 @@ The LATEST run of each algorithm is saved in runs/cli/<algo>/ (cleared when that
                                     steps past the clip limit (A > 0 and r > 1.2, or A < 0 and r < 0.8),
                                     the ratio r on steps with A > 0 (mean, 90th percentile) and A < 0
                                     (mean, 10th percentile), the largest and smallest r
-The web page http://localhost:3000 shows and compares them (live while training).
+The web page http://localhost:3000 shows and compares them (double cart-pole: http://localhost:3000/double),
+live while training.
 
 One batch_ac iteration (same code as the Learn page, rl/explain.py):
     1. the FROZEN policy plays --batch complete episodes
@@ -105,21 +109,51 @@ def make_session(algo: str, args):
     """Build the algorithm. Options left at None use the algorithm's own defaults."""
     pick = lambda value, default: default if value is None else value  # noqa: E731
     if algo == "batch_ac":
-        cfg = LearnConfig(env_id="CartPole-v1", seed=args.seed, batch_episodes=pick(args.batch, 5),
+        cfg = LearnConfig(env_id=SPEC.env_id, seed=args.seed, batch_episodes=pick(args.batch, 5),
                           hidden=pick(args.hidden, 8), actor_lr=pick(args.actor_lr, 0.01),
                           critic_lr=pick(args.critic_lr, 0.03), gamma=args.gamma, optimizer=args.optimizer)
         return ExplainSession(cfg), cfg.model_dump()
     base = {**PPOConfig().model_dump(), **VARIANTS[algo]}
-    cfg = PPOConfig(**{**base, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, base["hidden"]),
+    cfg = PPOConfig(**{**base, "env_id": SPEC.env_id, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, base["hidden"]),
                        "actor_lr": pick(args.actor_lr, base["actor_lr"]), "critic_lr": pick(args.critic_lr, base["critic_lr"]),
                        **({"batch_episodes": args.batch} if args.batch is not None and base["batch_episodes"] else {})})
     return PPOSession(cfg), cfg.model_dump()
 from rl.logger import runs_dir  # noqa: E402
+from rl.double_cartpole import from_obs, reference_controller  # noqa: E402
+
+
+class EnvSpec:
+    """Everything that differs between the environments; chosen with --env."""
+
+    def __init__(self, key: str):
+        self.key = key
+        if key == "cartpole":
+            self.env_id, self.title, self.folder = "CartPole-v1", "CartPole", "cli"
+            self.reference_text = "angle + 0.5·ang_vel > 0 → right"
+            self.reference = lambda s: 1 if s[2] + 0.5 * s[3] > 0 else 0
+            self.angles = lambda s: abs(float(s[2]))  # for the quality test: mean |pole angle|
+        else:
+            self.env_id, self.title, self.folder = "DoubleCartPole-v0", "Double CartPole", "double_cartpole"
+            self.reference_text = "the LQR controller, ±10 N"
+            ctrl = reference_controller()
+            self.reference = lambda s: ctrl(np.asarray(s))
+            # mean |stick angle| from vertical: both sticks (θ1 and θ2 = θ1 + φ)
+            self.angles = lambda s: 0.5 * (abs(float(s[2])) + abs(float(s[2] + s[4])))
+
+    def set_state(self, env, st) -> None:
+        """Put an unwrapped env exactly into the observed state `st`."""
+        if self.key == "cartpole":
+            env.state = np.array(st, dtype=np.float64)
+        else:
+            env.q, env.qd = from_obs(np.asarray(st))
+
+
+SPEC = EnvSpec("cartpole")  # replaced in main() by --env
 
 
 def reference_action(state) -> int:
-    """A hand-written controller: push towards the side the pole is falling to."""
-    return 1 if state[2] + 0.5 * state[3] > 0 else 0
+    """The hand-written good policy of the current environment."""
+    return SPEC.reference(state)
 
 
 @torch.no_grad()
@@ -130,7 +164,7 @@ def greedy_action(session: ExplainSession, state) -> int:
 
 def evaluate(policy, episodes: int = 10, render: bool = False) -> float:
     """Average return of `policy(state) -> action` on fixed start states."""
-    env = gym.make("CartPole-v1", render_mode="human" if render else None)
+    env = gym.make(SPEC.env_id, render_mode="human" if render else None)
     total = []
     for i in range(episodes):
         obs, _ = env.reset(seed=10_000 + i)
@@ -151,9 +185,9 @@ def record_episode(session: ExplainSession | None, it: int, folder: Path, name: 
     replays it) and frames as a GIF. session = None plays the hand-written good policy."""
     from PIL import Image
 
-    env = gym.make("CartPole-v1", render_mode="rgb_array")
+    env = gym.make(SPEC.env_id, render_mode="rgb_array")
     obs, _ = env.reset(seed=10_000)  # the same start as the first eval episode
-    states, actions, probs, frames = [], [], [], []
+    states, actions, probs, frames, good_actions = [], [], [], [], []
     while True:
         if session is None:  # the good policy: certain of its action
             a = reference_action(obs)
@@ -164,6 +198,7 @@ def record_episode(session: ExplainSession | None, it: int, folder: Path, name: 
         states.append(np.asarray(obs, dtype=float).tolist())
         actions.append(a)
         probs.append(p)
+        good_actions.append(reference_action(obs))
         if len(states) % 2 == 1:  # every 2nd frame keeps the GIF small
             frames.append(Image.fromarray(env.render()).resize((300, 200)))
         obs, _, term, trunc, _ = env.step(a)
@@ -172,7 +207,7 @@ def record_episode(session: ExplainSession | None, it: int, folder: Path, name: 
     env.close()
     name = name or f"iter{it:04d}"
     info = {"name": name, "iter": it, "steps": len(actions), "terminated": bool(term)}
-    (folder / f"{name}.json").write_text(json.dumps({**info, "states": states, "actions": actions, "probs": probs,
+    (folder / f"{name}.json").write_text(json.dumps({**info, "states": states, "actions": actions, "probs": probs, "good_actions": good_actions,
                                                     "final_state": np.asarray(obs, dtype=float).tolist()}))
     frames[0].save(folder / f"{name}.gif", save_all=True, append_images=frames[1:], duration=40, loop=0)
     return info
@@ -182,7 +217,7 @@ def record_episode(session: ExplainSession | None, it: int, folder: Path, name: 
 def quality_test(policy, starts: int = 20, max_steps: int = 10_000) -> dict:
     """The final policy, tested harder than training: up to `max_steps` (training stops at 500)
     from `starts` different start states. Survival, centering, calmness and action switching."""
-    env = gym.make("CartPole-v1", max_episode_steps=max_steps)
+    env = gym.make(SPEC.env_id, max_episode_steps=max_steps)
     lengths, abs_x, abs_th = [], [], []
     switches = survived = fell_cart = fell_pole = 0
     for i in range(starts):
@@ -193,7 +228,7 @@ def quality_test(policy, starts: int = 20, max_steps: int = 10_000) -> dict:
             switches += int(prev is not None and a != prev)
             prev = a
             abs_x.append(abs(float(obs[0])))
-            abs_th.append(abs(float(obs[2])))
+            abs_th.append(SPEC.angles(obs))
             obs, _, term, trunc, _ = env.step(a)
             n += 1
             if term or trunc:
@@ -240,7 +275,7 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
 
     No time limit (the critic bootstraps at the 500-step cut, so it estimates the never-ending
     task); 600 steps cover it (0.99^600 ≈ 0.002). Returns (mean, std) per state."""
-    env = gym.make("CartPole-v1").unwrapped  # no TimeLimit wrapper
+    env = gym.make(SPEC.env_id).unwrapped  # no TimeLimit wrapper
     gen = torch.Generator().manual_seed(seed)
     g = session.cfg.gamma
     means, stds = [], []
@@ -248,7 +283,7 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
         rets = []
         for r in range(rollouts):
             env.reset(seed=seed + 1000 * k + r)
-            env.state = np.array(st, dtype=np.float64)  # start exactly in this state
+            SPEC.set_state(env, st)  # start exactly in this state
             obs, ret, disc = np.array(st), 0.0, 1.0
             for _ in range(horizon):
                 p = F.softmax(session.actor(torch.as_tensor(session.encoder(obs, 0))), -1)
@@ -264,8 +299,14 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
     return np.array(means), np.array(stds)
 
 
+def web_page() -> str:
+    return "http://localhost:3000" + ("" if SPEC.key == "cartpole" else "/double")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--env", choices=["cartpole", "double_cartpole"], default="cartpole",
+                    help="cartpole (one stick) or double_cartpole (two sticks on a free hinge)")
     ap.add_argument("--algo", choices=[*ALGOS, "all"], default="batch_ac",
                     help="batch_ac | epochs | ratio | clip | gae | ppo, or all of them one after another")
     ap.add_argument("--budget", type=int, default=200_000, help="environment steps to train for (the same for every algorithm)")
@@ -280,31 +321,34 @@ def main() -> None:
     ap.add_argument("--eval-every", type=int, default=10)
     ap.add_argument("--render-every", type=int, default=25, help="show the current policy playing every N iterations (0 = never)")
     ap.add_argument("--plot", action=argparse.BooleanOptionalAction, default=True,
-                    help="plot to runs/cli/<algo>/plot.png and open it at the end")
+                    help="plot to <run folder>/plot.png and open it at the end")
     ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
     ap.add_argument("--record-every", type=int, default=10, help="save one episode of the current policy every N iterations")
     ap.add_argument("--open", action=argparse.BooleanOptionalAction, default=True, help="open the plot at the end")
     ap.add_argument("--quality-steps", type=int, default=10_000, help="length of the final-policy test (training stops at 500)")
     ap.add_argument("--quality-starts", type=int, default=20, help="start states in the final-policy test")
     args = ap.parse_args()
+    global SPEC
+    SPEC = EnvSpec(args.env)
     if args.algo == "all":  # the whole ladder, one after another, no windows
         args.render_every, args.open = 0, False
         for algo in ALGOS:
             print(f"\n========== {algo}: {ALGOS[algo]} ==========")
             train(algo, args)
-        print("\nDone. Compare them on http://localhost:3000")
+        print(f"\nDone. Compare them on {web_page()}")
     else:
         train(args.algo, args)
 
 
 def train(algo: str, args) -> None:
     session, resolved = make_session(algo, args)
-    out_dir = runs_dir() / "cli" / algo  # the latest run of this algorithm
+    out_dir = runs_dir() / SPEC.folder / algo  # the latest run of this algorithm in this environment
     shutil.rmtree(out_dir, ignore_errors=True)
     (out_dir / "episodes").mkdir(parents=True)
     csv_path = out_dir / "log.csv"
     (out_dir / "settings.json").write_text(json.dumps(
-        {"algo": algo, "algo_name": ALGOS[algo], "budget": args.budget, "seed": args.seed, "config": resolved}, indent=2))
+        {"algo": algo, "algo_name": ALGOS[algo], "env": SPEC.key, "env_id": SPEC.env_id, "budget": args.budget,
+         "seed": args.seed, "config": resolved}, indent=2))
     started = time.strftime("%Y-%m-%d %H:%M:%S")
 
     def status(state: str, it: int, steps: int = 0) -> None:
@@ -314,7 +358,7 @@ def train(algo: str, args) -> None:
     status("running", 0)
     record_episode(None, 0, out_dir / "episodes", name="good")  # the hand-written policy, for comparison
 
-    print(f"reference policy (angle + 0.5·ang_vel > 0 → right): eval return {evaluate(reference_action):.0f} / 500")
+    print(f"{SPEC.title} · reference policy ({SPEC.reference_text}): eval return {evaluate(reference_action):.0f} / 500")
     print(f"untrained policy: eval return {evaluate(lambda s: greedy_action(session, s)):.0f} / 500\n")
     cols = ["iter", "ret", "env_steps", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "clip_frac", "agree", "p_good",
             "ce_good", "dir", "eval", "true_err", "noise", "V_mean", "Vtrue_mean"]
@@ -333,7 +377,7 @@ def train(algo: str, args) -> None:
             print("(the plot opens when training ends; for a plot that updates DURING training: sudo apt install python3-tk)\n")
         plt.ion()
         fig, axes = plt.subplots(2, 2, figsize=(12, 7.5))
-        fig.suptitle(f"CartPole · {ALGOS[algo]}")
+        fig.suptitle(f"{SPEC.title} · {ALGOS[algo]}")
 
     f = open(csv_path, "w", newline="")
     writer = csv.DictWriter(f, fieldnames=cols)
@@ -452,7 +496,7 @@ def train(algo: str, args) -> None:
         (out_dir / "scorecard.json").write_text(json.dumps(card))
         _print_scorecard(card)
         status("finished", it, env_steps)
-    print(f"\n{ALGOS[algo]}: everything saved in {out_dir}   (web page: http://localhost:3000)")
+    print(f"\n{ALGOS[algo]}: everything saved in {out_dir}   (web page: {web_page()})")
     if fig is not None:
         if not live:
             _draw(fig, axes, rows, live)

@@ -174,8 +174,7 @@ class DoubleCartPoleEnv(gym.Env):
         import pygame
 
         W, H = 600, 400
-        if self._screen is None:
-            pygame.init()
+        if self._screen is None:  # display only: pygame.init() would also start audio
             if self.render_mode == "human":
                 pygame.display.init()
                 self._screen = pygame.display.set_mode((W, H))
@@ -215,7 +214,6 @@ class DoubleCartPoleEnv(gym.Env):
 
             if self.render_mode == "human":
                 pygame.display.quit()
-            pygame.quit()
             self._screen = None
 
 
@@ -276,3 +274,14 @@ class LQRController:
         """Action index: the force level closest to the LQR force (2 levels: its sign)."""
         u = np.clip(self.force(obs), self.levels.min(), self.levels.max())
         return int(np.argmin(np.abs(self.levels - u)))
+
+
+# gym.make("DoubleCartPole-v0") -> this env with a 500-step TimeLimit (truncated at 500)
+if "DoubleCartPole-v0" not in gym.registry:
+    gym.register(id="DoubleCartPole-v0", entry_point="rl.double_cartpole:DoubleCartPoleEnv", max_episode_steps=500)
+
+
+def reference_controller() -> LQRController:
+    """The 'good policy' for the training metrics: LQR mapped to the two pushes (checked by
+    scripts/check_double_cartpole.py: 100/100 starts survive 500 steps, 20/20 survive 10,000)."""
+    return LQRController(Params(), (-10.0, 10.0))
