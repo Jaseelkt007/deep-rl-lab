@@ -138,6 +138,7 @@ class EnvSpec:
         self.quality_steps = 200 if mc else 10_000  # default length of the final test
         # reward shaping used in TRAINING only; evaluation and the scorecard use the official reward
         self.shaping = "energy" if key == "mountaincar_energy" else "none"
+        self.measure = "length"  # what an episode is judged by: its length, or its score (return)
         if key == "cartpole":
             self.env_id, self.title, self.folder = "CartPole-v1", "CartPole", "cli"
             self.reference_text = "angle + 0.5·ang_vel > 0 → right"
@@ -160,8 +161,11 @@ class EnvSpec:
             # mean |stick angle| from vertical: both sticks (θ1 and θ2 = θ1 + φ)
             self.angles = lambda s: 0.5 * (abs(float(s[2])) + abs(float(s[2] + s[4])))
 
-    def succeeded(self, terminated: bool) -> bool:
-        """Did this episode succeed? CartPole-like: it was NOT terminated (reached the time limit)."""
+    def succeeded(self, terminated: bool, score: float | None = None) -> bool:
+        """Did this episode succeed? CartPole-like: it was NOT terminated (reached the time limit).
+        MountainCar: it terminated (the flag). Score-judged envs (LunarLander): score ≥ 200."""
+        if self.measure == "score":
+            return score is not None and score >= 200
         return terminated if self.success_is_terminal else not terminated
 
     def good_batch(self, row: dict) -> bool:
@@ -177,6 +181,10 @@ class EnvSpec:
         if row.get("eval_success") is not None:
             return row["eval_success"] >= 1.0
         return row["eval"] is not None and row["eval"] >= 500  # logs from before eval_success existed
+
+    def outcome(self, env, obs, terminated: bool) -> str | None:
+        """How an episode ended, where the length does not say it (LunarLander)."""
+        return None
 
     def set_state(self, env, st) -> None:
         """Put an unwrapped env exactly into the observed state `st`."""
@@ -200,23 +208,26 @@ def greedy_action(session: ExplainSession, state) -> int:
     return int(session.actor(x).argmax())
 
 
-def evaluate(policy, episodes: int = 10, render: bool = False) -> tuple[float, float]:
-    """`policy(state) -> action` on fixed start states: (mean episode LENGTH, share that succeeded).
-    CartPole: length = return (500 = perfect). MountainCar: length = steps to the flag (200 = never)."""
+def evaluate(policy, episodes: int = 10, render: bool = False) -> tuple[float, float, float]:
+    """`policy(state) -> action` on fixed start states: (mean episode LENGTH, share that succeeded,
+    mean SCORE = return with the official reward). CartPole: length = score (500 = perfect).
+    MountainCar: length = steps to the flag (200 = never)."""
     env = gym.make(SPEC.env_id, render_mode="human" if render else None)
-    lengths, wins = [], []
+    lengths, wins, scores = [], [], []
     for i in range(episodes):
         obs, _ = env.reset(seed=10_000 + i)
-        n = 0
+        n, score = 0, 0.0
         while True:
             obs, r, term, trunc, _ = env.step(policy(obs))
             n += 1
+            score += float(r)
             if term or trunc:
                 break
         lengths.append(n)
-        wins.append(SPEC.succeeded(term))
+        scores.append(score)
+        wins.append(SPEC.succeeded(term, score))
     env.close()
-    return float(np.mean(lengths)), float(np.mean(wins))
+    return float(np.mean(lengths)), float(np.mean(wins)), float(np.mean(scores))
 
 
 @torch.no_grad()
@@ -228,6 +239,7 @@ def record_episode(session: ExplainSession | None, it: int, folder: Path, name: 
     env = gym.make(SPEC.env_id, render_mode="rgb_array")
     obs, _ = env.reset(seed=10_000)  # the same start as the first eval episode
     states, actions, probs, frames, good_actions = [], [], [], [], []
+    score = 0.0
     while True:
         if session is None:  # the good policy: certain of its action
             a = reference_action(obs)
@@ -242,13 +254,15 @@ def record_episode(session: ExplainSession | None, it: int, folder: Path, name: 
         good_actions.append(reference_action(obs))
         if len(states) % 2 == 1:  # every 2nd frame keeps the GIF small
             frames.append(Image.fromarray(env.render()).resize((300, 200)))
-        obs, _, term, trunc, _ = env.step(a)
+        obs, r, term, trunc, _ = env.step(a)
+        score += float(r)
         if term or trunc:
             break
+    outcome = SPEC.outcome(env, obs, term)
     env.close()
     name = name or f"iter{it:04d}"
     info = {"name": name, "iter": it, "steps": len(actions), "terminated": bool(term),
-            "kind": "good" if session is None else "greedy"}
+            "kind": "good" if session is None else "greedy", "score": score, "outcome": outcome}
     (folder / f"{name}.json").write_text(json.dumps({**info, "states": states, "actions": actions, "probs": probs, "good_actions": good_actions,
                                                     "final_state": np.asarray(obs, dtype=float).tolist()}))
     frames[0].save(folder / f"{name}.gif", save_all=True, append_images=frames[1:], duration=40, loop=0)
@@ -267,7 +281,7 @@ def record_training_episode(tr: dict, it: int, folder: Path) -> dict | None:
     terminated = bool(ep["terminated"]) if "terminated" in ep else ep.get("end") == "terminated"
     states = ep["states"]
     info = {"name": f"train{it:04d}", "iter": it, "steps": len(ep["actions"]), "terminated": terminated, "kind": "training",
-            "complete": bool(whole)}
+            "complete": bool(whole), "score": ep.get("ret")}
     (folder / f"{info['name']}.json").write_text(json.dumps({
         **info, "states": states, "actions": [int(a) for a in ep["actions"]], "probs": ep["probs"],
         "good_actions": [reference_action(np.asarray(s)) for s in states]}))
@@ -280,23 +294,26 @@ def quality_test(policy, starts: int = 20, max_steps: int = 10_000) -> dict:
     from `starts` different start states. Survival, centering, calmness and action switching.
     MountainCar: 'survived' = reached the flag, and the curve = share that reached it by step t."""
     env = gym.make(SPEC.env_id, max_episode_steps=max_steps)
-    lengths, abs_x, abs_th, ok = [], [], [], []
+    lengths, abs_x, abs_th, ok, scores, outcomes = [], [], [], [], [], []
     switches = survived = fell_cart = fell_pole = 0
     for i in range(starts):
         obs, _ = env.reset(seed=20_000 + i)
-        prev, n = None, 0
+        prev, n, score = None, 0, 0.0
         while True:
             a = policy(obs)
             switches += int(prev is not None and a != prev)
             prev = a
             abs_x.append(abs(float(obs[0])))
             abs_th.append(SPEC.angles(obs))
-            obs, _, term, trunc, _ = env.step(a)
+            obs, r, term, trunc, _ = env.step(a)
             n += 1
+            score += float(r)
             if term or trunc:
                 break
         lengths.append(n)
-        ok.append(SPEC.succeeded(term))
+        scores.append(score)
+        outcomes.append(SPEC.outcome(env, obs, term))
+        ok.append(SPEC.succeeded(term, score))
         if ok[-1]:
             survived += 1
         elif SPEC.success_is_terminal:
@@ -309,6 +326,8 @@ def quality_test(policy, starts: int = 20, max_steps: int = 10_000) -> dict:
     grid = np.linspace(0, max_steps, 101)
     return {
         "starts": starts, "max_steps": max_steps, "lengths": lengths, "survived": survived,
+        "scores": scores, "median_score": float(np.median(scores)),
+        "outcomes": {o: outcomes.count(o) for o in sorted({o for o in outcomes if o is not None})},
         "fell_cart": fell_cart, "fell_pole": fell_pole, "median_len": float(np.median(lengths)),
         "mean_abs_x": float(np.mean(abs_x)), "mean_abs_theta": float(np.mean(abs_th)),
         "switch_rate": switches / max(1, sum(lengths) - starts),
@@ -438,12 +457,13 @@ def train(algo: str, args) -> None:
     record_episode(None, 0, out_dir / "episodes", name="good")  # the hand-written policy, for comparison
 
     target = "steps to the flag, lower is better (200 = never)" if SPEC.success_is_terminal else "steps balanced (500 = perfect)"
-    ref_len, ref_ok = evaluate(reference_action)
+    ref_len, ref_ok, ref_score = evaluate(reference_action)
     print(f"{SPEC.title} · reference policy ({SPEC.reference_text}): eval {ref_len:.0f} {target}, succeeds {ref_ok:.0%}")
-    un_len, un_ok = evaluate(lambda s: greedy_action(session, s))
+    un_len, un_ok, un_score = evaluate(lambda s: greedy_action(session, s))
     print(f"untrained policy: eval {un_len:.0f}, succeeds {un_ok:.0%}\n")
     cols = ["iter", "ret", "env_steps", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "clip_frac", "agree", "p_good",
-            "ce_good", "dir", "eval", "success", "eval_success", "max_x", "true_err", "noise", "V_mean", "Vtrue_mean"]
+            "ce_good", "dir", "eval", "success", "eval_success", "score", "eval_score", "max_x", "true_err", "noise", "V_mean",
+            "Vtrue_mean"]
     print(f"{'iter':>4} {'ret':>6} {'Lv (before → after)':>22} {'rel':>5} {'corr':>5} {'Lpi':>8} {'H':>5} {'EV':>6} "
           f"{'|A|':>6} {'KL':>8} {'agree':>6} {'p_good':>6} {'ce_good':>7} {'dir':>5} {'eval':>5}")
 
@@ -497,22 +517,26 @@ def train(algo: str, args) -> None:
             env_steps += s["steps"]
             # episode LENGTH (CartPole: = return) and the share of the finished episodes that succeeded
             if "finished_lengths" in s:  # PPO session: the episodes that ended in this batch
-                lens, terms = s["finished_lengths"], s["finished_terminated"]
+                lens, terms, rets = s["finished_lengths"], s["finished_terminated"], s["finished_returns"]
             else:  # batch actor-critic: complete episodes
                 lens = [len(ep["states"]) for ep in tr["episodes"]]
                 terms = [bool(ep["terminated"]) for ep in tr["episodes"]]
+                rets = [float(ep["ret"]) for ep in tr["episodes"]]  # official reward (no shaping bonus)
             mean_len = float(np.mean(lens)) if lens else (rows[-1]["ret"] if rows else float("nan"))
-            success = float(np.mean([SPEC.succeeded(t) for t in terms])) if terms else (rows[-1]["success"] if rows else None)
+            success = (float(np.mean([SPEC.succeeded(t, g) for t, g in zip(terms, rets)])) if terms
+                       else (rows[-1]["success"] if rows else None))
+            score = float(np.mean(rets)) if rets else (rows[-1]["score"] if rows else None)
             row = {"iter": it, "ret": mean_len, "env_steps": env_steps, "Lv": s["critic_loss"], "Lv_after": s["critic_loss_after"],
                    "rel": rel, "corr": corr, "Lpi": s["actor_loss"], "H": s["entropy"], "EV": ev,
                    "absA": s["mean_abs_adv"], "KL": kl, "clip_frac": clip_frac, "agree": agree, "p_good": p_good, "ce_good": ce_good,
                    "dir": direction, "eval": None, "success": success, "eval_success": None,
+                   "score": score, "eval_score": None,
                    # MountainCar: the highest position each episode (piece) reached, averaged; the flag is at 0.5
                    "max_x": (float(np.mean([max(st[0] for st in ep["states"]) for ep in tr["episodes"] if ep["states"]]))
                              if SPEC.success_is_terminal else None),
                    "true_err": None, "noise": None, "V_mean": None, "Vtrue_mean": None}
             if it % args.eval_every == 0 or it == 1 or last:
-                row["eval"], row["eval_success"] = evaluate(lambda st: greedy_action(session, st))
+                row["eval"], row["eval_success"], row["eval_score"] = evaluate(lambda st: greedy_action(session, st))
             truth_line = ""
             if args.truth_every and (it % args.truth_every == 0 or it == 1):
                 probe = [states[i] for i in np.linspace(0, len(states) - 1, 10).astype(int)]
