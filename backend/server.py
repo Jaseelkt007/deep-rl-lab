@@ -438,16 +438,26 @@ def cli_algos() -> list[dict]:
     return out
 
 
+def _cli_episodes(d) -> list[dict]:
+    out = []
+    for p in sorted((d / "episodes").glob("*.json")):
+        ep = json.loads(p.read_text())
+        out.append({k: ep[k] for k in ("name", "iter", "steps", "terminated")})
+    return out
+
+
 @app.get("/api/cli/run/{algo}")
 def cli_run(algo: str) -> dict:
     d = _cli_dir(algo)
-    episodes = []
-    for p in sorted((d / "episodes").glob("*.json")):
-        ep = json.loads(p.read_text())
-        episodes.append({k: ep[k] for k in ("name", "iter", "steps", "terminated")})
     return clean({"algo": algo, "settings": json.loads((d / "settings.json").read_text()),
-                  "status": _cli_json(d / "status.json") or {}, "rows": _cli_rows(d), "episodes": episodes,
+                  "status": _cli_json(d / "status.json") or {}, "rows": _cli_rows(d), "episodes": _cli_episodes(d),
                   "scorecard": _cli_json(d / "scorecard.json")})
+
+
+@app.get("/api/cli/run/{algo}/episodes")
+def cli_episode_list(algo: str) -> list[dict]:
+    """The recorded episodes of one algorithm (no trajectories), for the side-by-side replay."""
+    return _cli_episodes(_cli_dir(algo))
 
 
 @app.get("/api/cli/run/{algo}/episode/{name}")
