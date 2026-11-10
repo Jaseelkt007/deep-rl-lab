@@ -436,10 +436,14 @@ def _cli_per_epoch(d) -> list[dict]:
         return [{k: _num(v) for k, v in r.items()} for r in _csv.DictReader(f)]
 
 
-def _inner_summary(rows: list[dict], per_epoch: list[dict]) -> dict | None:
+def _inner_summary(rows: list[dict], per_epoch: list[dict], env: str = "cartpole") -> dict | None:
     """Inside one batch, averaged: after each epoch, how far the policy is from π_old. Only the
-    iterations where the batch was still learning (mean length < 475); after that A ≈ 0 and nothing moves."""
-    learning = {r["iter"] for r in rows if isinstance(r.get("ret"), float) and r["ret"] < 475}
+    iterations where the batch was still learning (cart-poles: mean length < 475; MountainCar: not every
+    episode reached the flag); after that A ≈ 0 and nothing moves."""
+    if env == "mountaincar":
+        learning = {r["iter"] for r in rows if not (isinstance(r.get("success"), float) and r["success"] >= 0.95)}
+    else:
+        learning = {r["iter"] for r in rows if isinstance(r.get("ret"), float) and r["ret"] < 475}
     sel = [e for e in per_epoch if e["iter"] in learning]
     if not sel:
         return None
@@ -469,7 +473,7 @@ def cli_algos(env: str = "cartpole") -> list[dict]:
             "algo": d.name, "settings": json.loads(settings.read_text()), "status": _cli_json(d / "status.json") or {},
             "scorecard": _cli_json(d / "scorecard.json"),
             "speed": [{k: r.get(k) for k in ("iter", "env_steps", "ret", "eval", "KL", "clip_frac")} for r in rows],
-            "inner": _inner_summary(rows, _cli_per_epoch(d)),
+            "inner": _inner_summary(rows, _cli_per_epoch(d), env),
         }))
     return out
 

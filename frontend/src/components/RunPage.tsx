@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
 import { BACKEND } from "@/lib/api";
-import { ACTION_COLORS, C } from "@/lib/colors";
+import { ACTION_COLORS, ACTION_GLYPH, C } from "@/lib/colors";
 import { fmt } from "@/lib/math";
 import type { EnvId, StepRec } from "@/lib/types";
 import EnvView from "./EnvView";
@@ -180,7 +180,8 @@ interface StateRow {
   name: string;
   unit: string;
   range: string;
-  scale: number; // what the network input is divided by (≈ ±1)
+  scale: number; // network input = (value − offset) / scale  (≈ ±1)
+  offset?: number;
   deg?: boolean; // also show degrees
   derived?: (s: number[]) => number; // computed from the state, not one of its numbers
 }
@@ -191,7 +192,7 @@ interface Trace {
   dash?: number[];
 }
 export interface EnvCfg {
-  key: "cartpole" | "double_cartpole" | "double_cartpole_joint";
+  key: "cartpole" | "double_cartpole" | "double_cartpole_joint" | "mountaincar";
   envId: EnvId;
   title: string;
   tab: string;
@@ -208,7 +209,29 @@ export interface EnvCfg {
   endText: (s: number[], steps: number) => string;
   status: (s: number[]) => string; // one line under the cart in the side-by-side replay
   angleColumn: string; // the quality test's angle measure
+  /** "limit": success = still going at the time limit, longer is better (the cart-poles).
+   *  "flag": success = the episode ends at the goal, shorter is better (MountainCar). */
+  success: "limit" | "flag";
+  lengthMax: number; // the time limit (y-axis of the length charts)
+  label: {
+    length: string; // what an episode's length means
+    speed: string; // scorecard column: the greedy policy succeeds on all 10 eval starts
+    firstGood: string; // the first solved batch
+    stays: string;
+    quality: (steps: number) => string;
+    median: string;
+    curve: string; // the final-test curve
+  };
 }
+const CARTPOLE_LABELS = {
+  length: "steps balanced",
+  speed: "speed: steps to 500",
+  firstGood: "first batch ≥ 475",
+  stays: "stability: stays ≥ 475",
+  quality: (n: number) => `survives ${n.toLocaleString()} steps`,
+  median: "median survival",
+  curve: "Quality: share of the 20 starts still balancing (final policy, long test)",
+};
 const DEG = 180 / Math.PI;
 const D15 = 15 / DEG;
 const D20 = 20 / DEG;
@@ -240,6 +263,9 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
     endText: (s, n) => (Math.abs(s[0]) / 2.4 > Math.abs(s[2]) / 0.2095 ? `cart left the track after ${n} steps` : `pole fell after ${n} steps`),
     status: (s) => `cart ${s[0].toFixed(2)} m · pole ${(s[2] * DEG).toFixed(1)}°`,
     angleColumn: "mean |pole angle|",
+    success: "limit",
+    lengthMax: 500,
+    label: CARTPOLE_LABELS,
   },
   double_cartpole: {
     key: "double_cartpole",
@@ -275,6 +301,9 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
     },
     status: (s) => `cart ${s[0].toFixed(2)} m · lower ${(s[2] * DEG).toFixed(1)}° · top ${((s[2] + s[4]) * DEG).toFixed(1)}°`,
     angleColumn: "mean |stick angle|",
+    success: "limit",
+    lengthMax: 500,
+    label: CARTPOLE_LABELS,
   },
   double_cartpole_joint: {
     key: "double_cartpole_joint",
@@ -310,6 +339,46 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
     },
     status: (s) => `cart ${s[0].toFixed(2)} m · lower ${(s[2] * DEG).toFixed(1)}° · bend ${(s[4] * DEG).toFixed(1)}°`,
     angleColumn: "mean |stick angle|",
+    success: "limit",
+    lengthMax: 500,
+    label: CARTPOLE_LABELS,
+  },
+  mountaincar: {
+    key: "mountaincar",
+    envId: "MountainCar-v0",
+    title: "MountainCar",
+    tab: "MountainCar",
+    href: "/mountaincar",
+    command: (algo) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --env mountaincar --algo ${algo}`,
+    actions: ["left", "none", "right"],
+    state: [
+      { name: "position x", unit: "", range: "−1.2 … 0.6 (flag at 0.5)", scale: 0.9, offset: -0.3 },
+      { name: "velocity v", unit: "", range: "±0.07", scale: 0.07 },
+      { name: "height on the hill", unit: "", range: "0 … 1", scale: 1, derived: (s) => 0.45 * Math.sin(3 * s[0]) + 0.55 },
+    ],
+    reward: "−1 per step until the flag",
+    ends: "terminated: position ≥ 0.5 (the flag) · truncated: 200 steps",
+    goodPolicy: "push in the direction you are moving (v ≥ 0 → right, else left)",
+    goodAction: (s) => (s[1] >= 0 ? 2 : 0),
+    traces: [
+      { label: "position", f: (s) => (s[0] + 0.3) / 0.9, color: C.ink },
+      { label: "velocity", f: (s) => s[1] / 0.07, color: C.critic },
+    ],
+    traceNote: "position as the network sees it (the flag is at 0.89) and velocity / 0.07",
+    endText: (_s, n) => `reached the flag after ${n} steps`,
+    status: (s) => `x ${s[0].toFixed(3)} · v ${s[1] >= 0 ? "+" : ""}${s[1].toFixed(4)}`,
+    angleColumn: "",
+    success: "flag",
+    lengthMax: 200,
+    label: {
+      length: "steps to the flag (200 = never)",
+      speed: "speed: steps until every eval start reaches the flag",
+      firstGood: "first batch where all reach the flag",
+      stays: "stability: stays solved",
+      quality: (n: number) => `reaches the flag within ${n} steps`,
+      median: "median steps to the flag",
+      curve: "Quality: share of the 20 starts that have reached the flag by step t (final policy)",
+    },
   },
 };
 const EnvCtx = createContext<EnvCfg>(ENVS.cartpole);
@@ -486,7 +555,8 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
   const bestBatch = best(cards.map((c) => c.speed_stability.batch475_steps), false);
   const bestStay = best(cards.map((c) => c.speed_stability.stay_475), true);
   const bestSurv = best(cards.map((c) => c.quality.learned.survived), true);
-  const bestMedian = best(cards.map((c) => c.quality.learned.median_len), true);
+  const flag = env.success === "flag";
+  const bestMedian = best(cards.map((c) => c.quality.learned.median_len), !flag); // MountainCar: fewer steps is better
 
   const cell = "px-2 py-1.5 text-right tabular-nums";
   const head = "px-2 py-1 text-right font-normal";
@@ -501,8 +571,8 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
       <td className={cell}>
         <B on={bold && q.median_len === bestMedian}>{Math.round(q.median_len).toLocaleString()}</B>
       </td>
-      <td className={cell}>{q.mean_abs_x.toFixed(2)} m</td>
-      <td className={cell}>{q.mean_abs_theta.toFixed(3)} rad</td>
+      {!flag && <td className={cell}>{q.mean_abs_x.toFixed(2)} m</td>}
+      {!flag && <td className={cell}>{q.mean_abs_theta.toFixed(3)} rad</td>}
       <td className={cell}>{(q.switch_rate * 100).toFixed(0)}%</td>
     </>
   );
@@ -510,7 +580,7 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
   return (
     <Panel
       title="Compare the algorithms"
-      help="Every algorithm gets the same budget of environment steps (200,000). Their iterations are NOT comparable (a PPO iteration is 2,048 steps, a batch actor-critic iteration is 5 episodes), so the x-axis here is environment steps. Speed: steps until the greedy policy first scores 500. Stability: after the batch first averages ≥ 475, how often it stays there. Quality: the FINAL policy, most likely action, tested for up to 10,000 steps from 20 start states (training stops at 500). Click a row to open that algorithm below."
+      help="Every algorithm gets the same budget of environment steps (200,000). Their iterations are NOT comparable (a PPO iteration is 2,048 steps, a batch actor-critic iteration is 5 episodes), so the x-axis here is environment steps. Speed: steps until the greedy policy first succeeds on all 10 eval starts (CartPole: balances 500 steps; MountainCar: reaches the flag). Stability: after the first solved batch, how often later batches stay solved. Quality: the FINAL policy, most likely action, tested from 20 start states (CartPole: up to 10,000 steps; MountainCar: within the 200-step limit, fewer steps is better). Click a row to open that algorithm below."
     >
       <div className="space-y-3">
         <div className="overflow-x-auto">
@@ -519,13 +589,13 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
               <tr>
                 <th className="px-2 py-1 text-left font-normal">algorithm</th>
                 <th className={head}>gradient steps per batch</th>
-                <th className={head}>speed: steps to 500</th>
-                <th className={head}>first batch ≥ 475</th>
-                <th className={head}>stability: stays ≥ 475</th>
-                <th className={head}>survives {maxSteps.toLocaleString()} steps</th>
-                <th className={head}>median survival</th>
-                <th className={head}>mean |cart position|</th>
-                <th className={head}>{env.angleColumn}</th>
+                <th className={head}>{env.label.speed}</th>
+                <th className={head}>{env.label.firstGood}</th>
+                <th className={head}>{env.label.stays}</th>
+                <th className={head}>{env.label.quality(maxSteps)}</th>
+                <th className={head}>{env.label.median}</th>
+                {!flag && <th className={head}>mean |cart position|</th>}
+                {!flag && <th className={head}>{env.angleColumn}</th>}
                 <th className={head}>action switches</th>
               </tr>
             </thead>
@@ -611,7 +681,7 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
                   ))}
                 </span>
               </div>
-              <UChart x={speed.x} ys={speed.ys} series={speed.series} height={180} yRange={[0, 520]} xLabel="environment steps" />
+              <UChart x={speed.x} ys={speed.ys} series={speed.series} height={180} yRange={[0, env.lengthMax * 1.04]} xLabel="environment steps" />
               <div className="text-[11px] text-neutral-400">
                 {speedY === "ret" ? "batch: mean length of the episodes played while learning (sampled actions)" : "greedy: most likely action, 10 fixed starts, every 10 iterations"}
               </div>
@@ -622,7 +692,7 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
               <div className="text-[11px] text-neutral-400">KL(π_old ‖ π_new) on the batch states, log scale. Big = the update moved the policy far from the one that collected the data.</div>
             </div>
             <div>
-              <div className="text-[11.5px] font-medium text-neutral-700">Quality: share of the 20 starts still balancing (final policy, long test)</div>
+              <div className="text-[11.5px] font-medium text-neutral-700">{env.label.curve}</div>
               {surv.ys.length ? (
                 <UChart x={surv.x} ys={surv.ys} series={surv.series} height={180} yRange={[0, 1]} xLabel="step" />
               ) : (
@@ -637,7 +707,7 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
             <div className="mb-1 border-t border-neutral-100 pt-3 text-[12px] font-medium text-neutral-800">
               Inside one batch: how far the policy has moved from π_old after each epoch
               <span className="ml-2 text-[11px] font-normal text-neutral-500">
-                average over the iterations that were still learning (batch mean &lt; 475; afterwards A ≈ 0 and nothing moves) · iterations: {inner.note}
+                average over the iterations that were still learning ({env.success === "flag" ? "not every episode reached the flag" : "batch mean < 475"}; afterwards A ≈ 0 and nothing moves) · iterations: {inner.note}
               </span>
             </div>
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -747,7 +817,7 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
                     {d.deg ? ` (${(v * DEG).toFixed(1)}°)` : ""}
                   </td>
                   <td className="py-0.5 text-right text-neutral-400" title={d.derived ? "not a network input" : "network input (scaled)"}>
-                    {d.derived ? "" : (v / d.scale).toFixed(2)}
+                    {d.derived ? "" : ((v - (d.offset ?? 0)) / d.scale).toFixed(2)}
                   </td>
                 </tr>
               );
@@ -834,7 +904,7 @@ function Episodes({ data }: { data: RunData }) {
             good policy: {good.steps}
           </button>
         )}
-        <span className="ml-auto text-[11px] text-neutral-400">iteration: steps balanced</span>
+        <span className="ml-auto text-[11px] text-neutral-400">iteration: {env.label.length}</span>
       </div>
       {ep && ep.name === current && <Player key={ep.name} ep={ep} algo={data.algo} />}
     </div>
@@ -894,7 +964,15 @@ function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
           const j = Math.min(pb.i, len - 1);
           const s = sd.ep.states[j];
           const step = { s, a: sd.ep.actions[j], p: sd.ep.probs[j] } as unknown as StepRec;
-          const ended = pb.i >= len - 1 && sd.ep.terminated;
+          const atEnd = pb.i >= len - 1;
+          // a badge when the episode is over: CartPole-like only for a failure; MountainCar for both outcomes
+          const badge = !atEnd ? null : env.success === "flag"
+            ? sd.ep.terminated
+              ? { ok: true, text: endText(sd.ep, env) }
+              : { ok: false, text: `never reached the flag (${len} steps)` }
+            : sd.ep.terminated
+              ? { ok: false, text: endText(sd.ep, env) }
+              : null;
           return (
             <div key={k}>
               <div className="mb-1 flex flex-wrap items-baseline gap-x-2 text-[12.5px]">
@@ -904,20 +982,26 @@ function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
               </div>
               <div className="relative">
                 <EnvView envId={env.envId} step={step} trail={[]} actionNames={actions} />
-                {ended && (
-                  <div className="absolute left-1/2 top-2 -translate-x-1/2 rounded bg-[#e34948] px-2 py-0.5 text-[11.5px] font-medium text-white">{endText(sd.ep, env)}</div>
+                {badge && (
+                  <div
+                    className={`absolute left-1/2 top-2 -translate-x-1/2 rounded px-2 py-0.5 text-[11.5px] font-medium text-white ${badge.ok ? "bg-[#1baf7a]" : "bg-[#e34948]"}`}
+                  >
+                    {badge.text}
+                  </div>
                 )}
               </div>
               <div className="mt-1 text-[11.5px] tabular-nums text-neutral-600">
                 step {j + 1}/{len} · {env.status(s)}{" "}
-                {!sd.ep.terminated && pb.i >= len - 1 && <span className="text-[#0b7a52]">· reached 500</span>}
+                {env.success === "limit" && !sd.ep.terminated && atEnd && <span className="text-[#0b7a52]">· reached {env.lengthMax}</span>}
               </div>
             </div>
           );
         })}
       </div>
       <Controls pb={pb} />
-      <div className="mt-2 text-[11px] text-neutral-500">{env.traceNote}; cart position dashed</div>
+      <div className="mt-2 text-[11px] text-neutral-500">
+        {env.traceNote}; {env.traces[0].label} dashed
+      </div>
       <UChart x={trace.x} ys={trace.ys} series={trace.series} height={140} yRange={[-1, 1]} markers={[{ x: pb.i + 1, label: "", color: C.ink2 }]} xLabel="step" />
     </div>
   );
@@ -1392,7 +1476,14 @@ function AlgoDetail({ data }: { data: RunData }) {
               </Kv>
             ))}
             <Kv k="actions">
-              <span style={{ color: ACTION_COLORS.left }}>← left</span> · <span style={{ color: ACTION_COLORS.right }}>→ right</span>
+              {env.actions.map((a, k) => (
+                <span key={a}>
+                  {k > 0 && " · "}
+                  <span style={{ color: ACTION_COLORS[a] }}>
+                    {ACTION_GLYPH[a]} {a === "none" ? "no push" : a}
+                  </span>
+                </span>
+              ))}
             </Kv>
             <Kv k="reward">{env.reward}</Kv>
             <Kv k="ends">{env.ends}</Kv>
@@ -1404,7 +1495,7 @@ function AlgoDetail({ data }: { data: RunData }) {
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           <Chart
             title="Agent: episode length"
-            help="Batch: mean length of the episodes that ended in this batch (sampled actions). Eval: the most likely action, 10 fixed starts. 500 = perfect."
+            help={`Batch: mean length of the episodes that ended in this batch (sampled actions). Eval: the most likely action, 10 fixed starts. ${env.success === "flag" ? "Steps to the flag: lower is better, 200 = never reached." : "500 = perfect."}`}
             rows={rows}
             series={[
               { key: "ret", label: "batch", color: C.ink },
@@ -1413,14 +1504,14 @@ function AlgoDetail({ data }: { data: RunData }) {
           />
           <Chart
             title="Actor: is the policy right?"
-            help={`P(good action): probability given to the good policy's action (${env.goodPolicy}); 0.5 = coin flip, 1 = perfect. Agreement: how often the most likely action is the good one. Entropy: 0.69 = coin flip, 0 = always the same action.`}
+            help={`P(good action): probability given to the good policy's action (${env.goodPolicy}); ${(1 / env.actions.length).toFixed(2)} = random, 1 = perfect. Agreement: how often the most likely action is the good one. Entropy: ${Math.log(env.actions.length).toFixed(2)} = all actions equally likely, 0 = always the same action.`}
             rows={rows}
             series={[
               { key: "p_good", label: "P(good)", color: C.actor },
               { key: "agree", label: "agree", color: C.actor, dash: [5, 3] },
               { key: "H", label: "entropy", color: C.muted },
             ]}
-            range={[0, 1]}
+            range={[0, Math.max(1, Math.log(env.actions.length))]}
           />
           <Chart
             title="Actor: how far did this update move the policy?"
@@ -1553,9 +1644,6 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
                 {e.tab}
               </Link>
             ))}
-            <span className="cursor-not-allowed rounded px-2.5 py-1 text-neutral-400" title="next">
-              MountainCar <span className="text-[10px]">(next)</span>
-            </span>
           </div>
         }
       />
@@ -1596,8 +1684,10 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
                           ? `${a.status.state}… ${num(a.status.env_steps)} steps`
                           : a.scorecard
                             ? speed != null
-                              ? `500 after ${num(speed)} steps`
-                              : "never reached 500"
+                              ? `${env.success === "flag" ? "solved" : "500"} after ${num(speed)} steps`
+                              : env.success === "flag"
+                                ? "never solved"
+                                : "never reached 500"
                             : (a.status.state ?? "")}
                     </div>
                   </button>
