@@ -13,6 +13,7 @@ export interface SeriesSpec {
   fill?: string; // area fill (for bands)
   hidden?: boolean; // band edges: no line, no legend entry
   noLegend?: boolean; // drawn, but not listed (e.g. the faint raw series under a moving average)
+  points?: boolean; // draw a dot per value (for series with only one or a few values)
 }
 
 function decades(lo: number, hi: number): number[] {
@@ -100,7 +101,7 @@ export default function UChart({ x, ys, series, height = 150, yLog, yRange, mark
           width: s.hidden ? 0 : (s.width ?? 1.5),
           dash: s.dash,
           fill: s.fill,
-          points: { show: false },
+          points: { show: !!s.points, size: 6 },
           spanGaps: true,
           show: true,
           value: (_u: uPlot, v: number | null) => (v == null ? "–" : Math.abs(v) >= 1e4 || (Math.abs(v) < 1e-3 && v !== 0) ? v.toExponential(2) : v.toFixed(3)),

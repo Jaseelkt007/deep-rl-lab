@@ -13,13 +13,14 @@ import UChart, { Marker, SeriesSpec } from "./UChart";
 
 // ------------------------------------------------------------------ data
 type Row = Record<string, number | null>;
-type AlgoKey = "batch_ac" | "epochs" | "clip" | "gae" | "ppo";
+type AlgoKey = "batch_ac" | "epochs" | "ratio" | "clip" | "gae" | "ppo";
 
 interface AlgoConfig {
   batch_episodes?: number | null;
   batch_steps?: number | null;
   epochs?: number;
   minibatch?: number | null;
+  ratio?: boolean;
   clip?: number | null;
   gae_lambda?: number;
   adv_norm?: boolean;
@@ -78,6 +79,7 @@ interface AlgoSummary {
   status: Status;
   scorecard: Scorecard | null;
   speed: { iter: number; env_steps: number; ret: number; eval: number | null; KL?: number | null; clip_frac?: number | null }[];
+  inner: Inner | null;
 }
 interface EpisodeInfo {
   name: string;
@@ -91,7 +93,32 @@ interface RunData {
   status: Status;
   rows: Row[];
   episodes: EpisodeInfo[];
+  per_epoch: EpochRow[];
   scorecard: Scorecard | null;
+}
+/** After epoch k of iteration i: how far the policy is from π_old (the policy that played the batch). */
+interface EpochRow {
+  iter: number;
+  epoch: number;
+  kl: number;
+  past: number; // share of steps past the clip limit: A > 0 and r > 1.2, or A < 0 and r < 0.8
+  r_pos: number | null; // mean r = π/π_old on steps with A > 0
+  r_neg: number | null; // ... and with A < 0
+  r_hi: number | null; // 90th percentile of r on steps with A > 0 (the 10 % pushed up the most)
+  r_lo: number | null; // 10th percentile of r on steps with A < 0 (the 10 % pushed down the most)
+  r_max: number;
+  r_min: number;
+}
+/** EpochRow averaged over the iterations where the batch was still learning (mean length < 475). */
+interface Inner {
+  n_iters: number;
+  epoch: number[];
+  kl: (number | null)[];
+  past: (number | null)[];
+  r_pos: (number | null)[];
+  r_neg: (number | null)[];
+  r_hi?: (number | null)[];
+  r_lo?: (number | null)[];
 }
 interface Episode extends EpisodeInfo {
   states: number[][];
@@ -112,14 +139,21 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; color: st
     key: "epochs",
     tab: "+ epochs",
     name: "Batch Actor-Critic + 10 epochs",
-    adds: "use every batch 10 times: 10 gradient steps instead of 1, nothing stops the policy from moving too far",
+    adds: "use every batch 10 times: 10 gradient steps instead of 1, with the same loss −A·log π, as if the current policy had played the batch",
     color: "#6250d6",
+  },
+  {
+    key: "ratio",
+    tab: "+ ratio",
+    name: "+ importance ratio (no clip)",
+    adds: "loss −r·A with r = π(a|s)/π_old(a|s): corrects for the batch coming from π_old (r = 1 in epoch 1, so epoch 1 is unchanged), but nothing limits how far r goes",
+    color: "#e34948",
   },
   {
     key: "clip",
     tab: "+ clip",
-    name: "+ importance ratio and clip",
-    adds: "r = π/π_old; once π(a|s) has moved more than ±20 % in the direction A pushes, that step stops pushing",
+    name: "+ clip (ε = 0.2)",
+    adds: "the brake: once r has moved past 1.2 (A > 0) or below 0.8 (A < 0), that step stops pushing",
     color: "#eda100",
   },
   {
@@ -183,7 +217,7 @@ function tags(c: AlgoConfig): string[] {
     c.batch_steps ? `${c.batch_steps.toLocaleString()}-step batches` : `${c.batch_episodes ?? 5}-episode batches`,
     u.n != null ? `${u.n} gradient step${u.n === 1 ? "" : "s"} per batch` : u.text,
     lam === 1 ? "Monte Carlo returns" : `GAE λ ${lam}`,
-    c.clip ? `clip ε ${c.clip}` : "no clip",
+    c.clip ? `clip ε ${c.clip}` : c.ratio ? "ratio r·A, no clip" : (c.epochs ?? 1) > 1 ? "plain −A·log π, no ratio" : "plain −A·log π",
     ...(c.adv_norm ? ["normalised advantages"] : []),
   ];
 }
@@ -266,6 +300,40 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
       return { x: pts.map((p) => p.env_steps), y: pts.map((p) => p.KL!) };
     });
     return { ...overlay(curves), series: have.map((l) => ({ label: l.tab, color: l.color, width: 1.5 })) };
+  }, [have, by]);
+
+  // inside one batch: after each epoch, averaged over the iterations that were still learning
+  const inner = useMemo(() => {
+    const withInner = have.filter((l) => by[l.key]!.inner);
+    const curve = (k: "kl" | "past" | "r_hi" | "r_lo") =>
+      withInner.map((l) => {
+        const d = by[l.key]!.inner!;
+        return { x: d.epoch, y: d[k] ?? d.epoch.map(() => null) };
+      });
+    const spec = (dash?: number[]) =>
+      withInner.map((l) => ({ label: l.tab, color: l.color, width: 1.75, dash, points: by[l.key]!.inner!.epoch.length < 3 }));
+    const kl = overlay(curve("kl"));
+    const past = overlay(curve("past"));
+    const r = overlay([...curve("r_hi"), ...curve("r_lo")]);
+    const band = r.x.map(() => 1.2);
+    const bandLo = r.x.map(() => 0.8);
+    return {
+      n: withInner.length,
+      note: withInner.map((l) => `${l.tab} ${by[l.key]!.inner!.n_iters}`).join(" · "),
+      kl: { ...kl, series: spec() },
+      past: { ...past, series: spec() },
+      r: {
+        x: r.x,
+        ys: [...r.ys, band, bandLo],
+        series: [
+          ...spec().map((sp) => ({ ...sp, label: `${sp.label} A>0` })),
+          ...spec([4, 3]).map((sp) => ({ ...sp, label: `${sp.label} A<0`, noLegend: true })),
+          { label: "clip 1.2", color: GOOD_COLOR, hidden: true },
+          { label: "clip 0.8", color: GOOD_COLOR, hidden: true },
+        ],
+        bands: [{ hi: 2 * withInner.length, lo: 2 * withInner.length + 1, fill: "rgba(27,175,122,0.10)" }],
+      },
+    };
   }, [have, by]);
 
   const withCard = useMemo(() => have.filter((l) => by[l.key]!.scorecard), [have, by]);
@@ -437,6 +505,38 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
               ) : (
                 <div className="py-10 text-center text-[12px] text-neutral-400">appears when a run finishes</div>
               )}
+            </div>
+          </div>
+        )}
+
+        {inner.n > 0 && (
+          <div>
+            <div className="mb-1 border-t border-neutral-100 pt-3 text-[12px] font-medium text-neutral-800">
+              Inside one batch: how far the policy has moved from π_old after each epoch
+              <span className="ml-2 text-[11px] font-normal text-neutral-500">
+                average over the iterations that were still learning (batch mean &lt; 475; afterwards A ≈ 0 and nothing moves) · iterations: {inner.note}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+              <div>
+                <div className="text-[11.5px] font-medium text-neutral-700">KL(π_old ‖ π) after each epoch</div>
+                <UChart x={inner.kl.x} ys={inner.kl.ys} series={inner.kl.series} height={170} yLog xLabel="epoch" />
+                <div className="text-[11px] text-neutral-400">How different the policy is from the one that played the batch. Log scale.</div>
+              </div>
+              <div>
+                <div className="text-[11.5px] font-medium text-neutral-700">Ratio r = π(a|s) / π_old(a|s) of the steps that moved most</div>
+                <UChart x={inner.r.x} ys={inner.r.ys} series={inner.r.series} bands={inner.r.bands} height={170} xLabel="epoch" />
+                <div className="text-[11px] text-neutral-400">
+                  Solid: 90th percentile of r on steps with A &gt; 0 (pushed up). Dashed: 10th percentile on steps with A &lt; 0 (pushed down). Green band = the clip range [0.8, 1.2].
+                </div>
+              </div>
+              <div>
+                <div className="text-[11.5px] font-medium text-neutral-700">Share of steps past the clip limit</div>
+                <UChart x={inner.past.x} ys={inner.past.ys} series={inner.past.series} height={170} yRange={[0, null]} xLabel="epoch" />
+                <div className="text-[11px] text-neutral-400">
+                  A &gt; 0 and r &gt; 1.2, or A &lt; 0 and r &lt; 0.8: steps where clip stops the push (without clip: where it would).
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -873,8 +973,18 @@ function UpdatePanel({ c }: { c: AlgoConfig }) {
               </span>
             </Mono>
           </>
+        ) : c.ratio ? (
+          <>
+            <Mono>r = π(a|s) / π_old(a|s)</Mono>
+            <br />
+            <Mono>L_π = −r·A</Mono>
+            <div className="text-[11px] text-neutral-500">no limit: for A &gt; 0 it pushes harder the larger r gets</div>
+          </>
         ) : (
-          <Mono>L_π = −A·log π(a|s)</Mono>
+          <>
+            <Mono>L_π = −A·log π(a|s)</Mono>
+            {(c.epochs ?? 1) > 1 && <div className="text-[11px] text-neutral-500">every epoch, as if the current policy had played the batch</div>}
+          </>
         )}
       </Kv>
       {c.adv_norm && <Kv k="normalise">A → mean 0, std 1 in each minibatch</Kv>}
@@ -936,6 +1046,108 @@ function Logs({ rows }: { rows: Row[] }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** The epochs inside ONE iteration: how the policy moves away from π_old, step by step. */
+function InsideIteration({ data }: { data: RunData }) {
+  const per = data.per_epoch;
+  const rowsByIter = useMemo(() => {
+    const m = new Map<number, EpochRow[]>();
+    per.forEach((e) => m.set(e.iter, [...(m.get(e.iter) ?? []), e]));
+    return m;
+  }, [per]);
+  const iters = useMemo(() => Array.from(rowsByIter.keys()).sort((a, b) => a - b), [rowsByIter]);
+  // the iteration whose update moved the policy furthest (last epoch's KL), a good one to look at first
+  const biggest = useMemo(() => {
+    let best = iters[0];
+    for (const it of iters) if ((rowsByIter.get(it)!.at(-1)!.kl ?? 0) > (rowsByIter.get(best)!.at(-1)!.kl ?? 0)) best = it;
+    return best;
+  }, [iters, rowsByIter]);
+  const [picked, setPicked] = useState<number | null>(null);
+  const it = picked != null && rowsByIter.has(picked) ? picked : biggest;
+  const rows = useMemo(() => rowsByIter.get(it) ?? [], [rowsByIter, it]);
+  const logRow = data.rows.find((r) => r.iter === it);
+  const one = rows.length < 3; // batch actor-critic: a single gradient step
+  const chart = useMemo(() => {
+    const x = rows.map((r) => r.epoch);
+    return {
+      x,
+      r: {
+        ys: [
+          rows.map((r) => r.r_hi ?? null),
+          rows.map((r) => r.r_lo ?? null),
+          rows.map((r) => r.r_max),
+          rows.map((r) => r.r_min),
+          rows.map((r) => r.r_pos),
+          rows.map((r) => r.r_neg),
+          x.map(() => 1.2),
+          x.map(() => 0.8),
+        ],
+        series: [
+          { label: "A>0: 90th pct", color: C.actor, width: 2, points: one },
+          { label: "A<0: 10th pct", color: C.neg, width: 2, points: one },
+          { label: "max r", color: C.actor, width: 1, dash: [3, 3], points: one },
+          { label: "min r", color: C.neg, width: 1, dash: [3, 3], points: one },
+          { label: "A>0: mean", color: C.actor, width: 1, dash: [1, 3], points: one },
+          { label: "A<0: mean", color: C.neg, width: 1, dash: [1, 3], points: one },
+          { label: "clip 1.2", color: C.pos, hidden: true },
+          { label: "clip 0.8", color: C.pos, hidden: true },
+        ] as SeriesSpec[],
+      },
+      kl: { ys: [rows.map((r) => (r.kl > 0 ? r.kl : null))], series: [{ label: "KL(π_old ‖ π)", color: C.ink, width: 2, points: one }] as SeriesSpec[] },
+      past: { ys: [rows.map((r) => r.past)], series: [{ label: "past clip limit", color: C.marker2, width: 2, points: one }] as SeriesSpec[] },
+    };
+  }, [rows, one]);
+  if (!iters.length) return null;
+  const k = iters.indexOf(it);
+  return (
+    <Panel
+      title={`Inside one iteration: the ${one ? "gradient step" : `${rows.length} epochs`} on one batch`}
+      help="The batch is played once by π_old. Then every epoch takes gradient steps on that same batch. After each epoch we measure, on all its states, how far the current policy is from π_old: the ratio r = π(a|s)/π_old(a|s) of the action that was taken (1 = unchanged), the KL, and the share of steps past the clip limit (A > 0 and r > 1.2, or A < 0 and r < 0.8). Without clip nothing stops r; with clip, steps past the limit stop pushing."
+    >
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[12px]">
+        <span className="text-neutral-500">iteration</span>
+        <button className="rounded border border-neutral-300 px-1.5" onClick={() => setPicked(iters[Math.max(0, k - 1)])}>
+          ‹
+        </button>
+        <input type="range" min={0} max={iters.length - 1} value={k} onChange={(e) => setPicked(iters[+e.target.value])} className="w-64" />
+        <button className="rounded border border-neutral-300 px-1.5" onClick={() => setPicked(iters[Math.min(iters.length - 1, k + 1)])}>
+          ›
+        </button>
+        <b className="w-10 tabular-nums">{it}</b>
+        {logRow && (
+          <span className="tabular-nums text-neutral-500">
+            batch mean length {Number(logRow.ret).toFixed(1)} · mean |A| {Number(logRow.absA).toFixed(2)}
+          </span>
+        )}
+        <button
+          className={`ml-auto rounded border px-2 py-0.5 ${it === biggest ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300"}`}
+          onClick={() => setPicked(biggest)}
+        >
+          biggest move (iteration {biggest})
+        </button>
+      </div>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.4fr_1fr_1fr]">
+        <div>
+          <div className="text-[11.5px] font-medium text-neutral-700">Ratio r = π(a|s) / π_old(a|s) after each epoch</div>
+          <UChart x={chart.x} ys={chart.r.ys} series={chart.r.series} bands={[{ hi: 6, lo: 7, fill: "rgba(27,175,122,0.10)" }]} height={180} xLabel="epoch" />
+          <div className="text-[11px] text-neutral-400">
+            Solid: the 10 % of steps pushed furthest (90th percentile of r where A &gt; 0, 10th where A &lt; 0). Dashed: the single most extreme step. Dotted: the mean, which stays near 1 because similar states with different actions pull against each other. Green band: the clip range [0.8, 1.2].
+          </div>
+        </div>
+        <div>
+          <div className="text-[11.5px] font-medium text-neutral-700">KL(π_old ‖ π) after each epoch</div>
+          <UChart x={chart.x} ys={chart.kl.ys} series={chart.kl.series} height={180} yLog xLabel="epoch" />
+          <div className="text-[11px] text-neutral-400">How different the whole policy is from π_old, on the batch states. Log scale.</div>
+        </div>
+        <div>
+          <div className="text-[11.5px] font-medium text-neutral-700">Share of steps past the clip limit</div>
+          <UChart x={chart.x} ys={chart.past.ys} series={chart.past.series} height={180} yRange={[0, null]} xLabel="epoch" />
+          <div className="text-[11px] text-neutral-400">A &gt; 0 and r &gt; 1.2, or A &lt; 0 and r &lt; 0.8.</div>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -1029,6 +1241,8 @@ function AlgoDetail({ data }: { data: RunData }) {
           />
         </div>
       )}
+
+      {data.per_epoch?.length > 0 && <InsideIteration key={data.algo} data={data} />}
 
       {rows.length > 0 && (
         <Panel title="Log" help={`The numbers the terminal printed (runs/cli/${data.algo}/log.csv).`}>
