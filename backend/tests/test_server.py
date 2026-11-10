@@ -110,7 +110,8 @@ def test_cli_endpoints(client, tmp_path):
                                                   "states": [[0, 0, 0, 0]] * 3, "actions": [0, 1, 0], "probs": [[0.5, 0.5]] * 3}))
     algos = client.get("/api/cli/algos").json()
     assert [a["algo"] for a in algos] == ["ppo"] and algos[0]["speed"][1] == {"iter": 2.0, "env_steps": 4096.0, "ret": 12.6, "eval": None,
-                                                                         "KL": None, "clip_frac": None}
+                                                                         "KL": None, "clip_frac": None, "score": None,
+                                                                         "eval_score": None}
     inner = algos[0]["inner"]  # averaged over iterations 1 and 2 (both still learning)
     assert inner["epoch"] == [1.0, 2.0] and inner["kl"] == pytest.approx([0.015, 0.04]) and inner["n_iters"] == 2
     r = client.get("/api/cli/run/ppo").json()
@@ -118,7 +119,7 @@ def test_cli_endpoints(client, tmp_path):
     assert len(r["per_epoch"]) == 4 and r["per_epoch"][3]["r_max"] == 2.0
     assert client.get("/api/cli/run/ppo/episode/iter0001").json()["actions"] == [0, 1, 0]
     assert client.get("/api/cli/run/ppo/episodes").json() == [{"name": "iter0001", "iter": 1, "steps": 3, "terminated": True,
-                                                                 "kind": "greedy"}]
+                                                                 "kind": "greedy", "score": None, "outcome": None}]
     assert client.get("/api/cli/run/ppo/episode/..%2Fsettings").status_code == 404
     assert client.get("/api/cli/run/nope").status_code == 404
 

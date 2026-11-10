@@ -475,7 +475,8 @@ def cli_algos(env: str = "cartpole") -> list[dict]:
         out.append(clean({
             "algo": d.name, "settings": json.loads(settings.read_text()), "status": _cli_json(d / "status.json") or {},
             "scorecard": _cli_json(d / "scorecard.json"),
-            "speed": [{k: r.get(k) for k in ("iter", "env_steps", "ret", "eval", "KL", "clip_frac")} for r in rows],
+            "speed": [{k: r.get(k) for k in ("iter", "env_steps", "ret", "eval", "KL", "clip_frac", "score", "eval_score")}
+                      for r in rows],
             "inner": _inner_summary(rows, _cli_per_epoch(d), env),
         }))
     return out
@@ -486,7 +487,8 @@ def _cli_episodes(d) -> list[dict]:
     for p in sorted((d / "episodes").glob("*.json")):
         ep = json.loads(p.read_text())
         kind = ep.get("kind") or ("good" if ep["name"] == "good" else "greedy")  # older runs: no kind
-        out.append({**{k: ep[k] for k in ("name", "iter", "steps", "terminated")}, "kind": kind})
+        out.append({**{k: ep[k] for k in ("name", "iter", "steps", "terminated")}, "kind": kind,
+                    "score": ep.get("score"), "outcome": ep.get("outcome")})
     return out
 
 
