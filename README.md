@@ -108,6 +108,18 @@ Runs are saved in `runs/double_cartpole/<algo>/` and shown on **http://localhost
 
 Watch the setup: `uv run python scripts/play_double_cartpole.py` (`--policy random`, `--policy none`, `--rule joint`, `--fps 10 --print-every 1`).
 
+## MountainCar
+
+The official `MountainCar-v0`: a car in a valley must reach the flag on the right hill (x ≥ 0.5), but its engine (0.001) is weaker than gravity on the slope (up to 0.0025), so it has to swing back and forth. State: position and velocity (scaled to ±1 for the networks). Actions: left, no push, right. Reward: −1 per step; the episode ends at the flag or after 200 steps. **Here success means reaching the flag, and fewer steps is better.**
+
+Random pushes never reach the flag in 200 steps (0%, and 4% even with 5,000 steps), so every episode returns −200 and the actor gets no signal. The hand-written rule "push in the direction you are moving" reaches it from every start (median 121 steps) and is the good policy on the page.
+
+```bash
+cd backend
+uv run python scripts/train_cartpole.py --env mountaincar --algo batch_ac      # … epochs, ratio, clip, gae, ppo
+```
+Runs: `runs/mountaincar/<algo>/`; page: **http://localhost:3000/mountaincar**.
+
 ## Other scripts
 
 ```bash
