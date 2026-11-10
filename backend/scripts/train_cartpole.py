@@ -111,12 +111,12 @@ def make_session(algo: str, args):
     pick = lambda value, default: default if value is None else value  # noqa: E731
     if algo == "batch_ac":
         cfg = LearnConfig(env_id=SPEC.env_id, seed=args.seed, batch_episodes=pick(args.batch, 5),
-                          hidden=pick(args.hidden, 8), actor_lr=pick(args.actor_lr, 0.01),
+                          hidden=pick(args.hidden, SPEC.hidden), actor_lr=pick(args.actor_lr, 0.01),
                           critic_lr=pick(args.critic_lr, 0.03), gamma=args.gamma, optimizer=args.optimizer,
                           shaping=SPEC.shaping)
         return ExplainSession(cfg), cfg.model_dump()
     base = {**PPOConfig().model_dump(), **VARIANTS[algo]}
-    cfg = PPOConfig(**{**base, "env_id": SPEC.env_id, "shaping": SPEC.shaping, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, base["hidden"]),
+    cfg = PPOConfig(**{**base, "env_id": SPEC.env_id, "shaping": SPEC.shaping, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, SPEC.hidden),
                        "actor_lr": pick(args.actor_lr, base["actor_lr"]), "critic_lr": pick(args.critic_lr, base["critic_lr"]),
                        **({"batch_episodes": args.batch} if args.batch is not None and base["batch_episodes"] else {})})
     return PPOSession(cfg), cfg.model_dump()
@@ -139,7 +139,26 @@ class EnvSpec:
         # reward shaping used in TRAINING only; evaluation and the scorecard use the official reward
         self.shaping = "energy" if key == "mountaincar_energy" else "none"
         self.measure = "length"  # what an episode is judged by: its length, or its score (return)
-        if key == "cartpole":
+        self.can_set_state = True  # the ground-truth critic check needs to start rollouts in a given state
+        self.budget, self.hidden = 200_000, 8  # defaults for --budget and --hidden
+        if key == "lunarlander":
+            from gymnasium.envs.box2d.lunar_lander import heuristic
+
+            class _Discrete:  # Gymnasium's heuristic only reads env.unwrapped.continuous
+                continuous = False
+
+                @property
+                def unwrapped(self):
+                    return self
+
+            self.env_id, self.title, self.folder = "LunarLander-v3", "LunarLander", "lunarlander"
+            self.measure, self.n_actions, self.quality_steps = "score", 4, 1000
+            self.can_set_state = False  # Box2D: terrain, legs and joints are not in the 8 numbers
+            self.budget, self.hidden = 1_000_000, 64  # a harder task: more steps, a bigger network
+            self.reference_text = "Gymnasium's hand-written heuristic"
+            self.reference = lambda s: int(heuristic(_Discrete(), np.asarray(s)))
+            self.angles = lambda s: abs(float(s[4]))  # for the final test: mean |lander angle|
+        elif key == "cartpole":
             self.env_id, self.title, self.folder = "CartPole-v1", "CartPole", "cli"
             self.reference_text = "angle + 0.5·ang_vel > 0 → right"
             self.reference = lambda s: 1 if s[2] + 0.5 * s[3] > 0 else 0
@@ -169,22 +188,39 @@ class EnvSpec:
         return terminated if self.success_is_terminal else not terminated
 
     def good_batch(self, row: dict) -> bool:
-        """A batch that counts as 'solved' (CartPole: mean length ≥ 475; MountainCar: all reach the flag)."""
+        """A batch that counts as 'solved' (CartPole: mean length ≥ 475; MountainCar: all reach the flag;
+        LunarLander: mean score ≥ 200)."""
+        if self.measure == "score":
+            return (row.get("score") or -1e9) >= 200
         return (row.get("success") or 0) >= 0.95 if self.success_is_terminal else row["ret"] >= 475
 
     def bad_batch(self, row: dict) -> bool:
-        """A drop after solving (CartPole: mean length < 250; MountainCar: fewer than half reach the flag)."""
+        """A drop after solving (CartPole: mean length < 250; MountainCar: fewer than half reach the flag;
+        LunarLander: mean score below 0)."""
+        if self.measure == "score":
+            return (row.get("score") or 0) < 0
         return (row.get("success") or 0) < 0.5 if self.success_is_terminal else row["ret"] < 250
 
     def solved_eval(self, row: dict) -> bool:
-        """The greedy policy succeeds on all 10 eval starts."""
+        """The greedy policy succeeds on all 10 eval starts (LunarLander: averages ≥ 200 over them)."""
+        if self.measure == "score":
+            return row.get("eval_score") is not None and row["eval_score"] >= 200
         if row.get("eval_success") is not None:
             return row["eval_success"] >= 1.0
         return row["eval"] is not None and row["eval"] >= 500  # logs from before eval_success existed
 
     def outcome(self, env, obs, terminated: bool) -> str | None:
         """How an episode ended, where the length does not say it (LunarLander)."""
-        return None
+        if self.key != "lunarlander":
+            return None
+        u = env.unwrapped
+        if not terminated:
+            return "time limit"  # still flying (hovering) after 1,000 steps
+        if u.game_over:
+            return "crashed"  # the body touched the ground
+        if abs(float(obs[0])) >= 1.0:
+            return "flew away"
+        return "landed"  # came to rest
 
     def set_state(self, env, st) -> None:
         """Put an unwrapped env exactly into the observed state `st`."""
@@ -316,14 +352,15 @@ def quality_test(policy, starts: int = 20, max_steps: int = 10_000) -> dict:
         ok.append(SPEC.succeeded(term, score))
         if ok[-1]:
             survived += 1
-        elif SPEC.success_is_terminal:
-            fell_pole += 1  # MountainCar: did not reach the flag in time
+        elif SPEC.success_is_terminal or SPEC.measure == "score":
+            fell_pole += 1  # MountainCar: did not reach the flag; LunarLander: scored below 200
         elif abs(obs[0]) > 2.4:
             fell_cart += 1
         else:
             fell_pole += 1
     env.close()
     grid = np.linspace(0, max_steps, 101)
+    score_grid = np.linspace(-300, 320, 125)
     return {
         "starts": starts, "max_steps": max_steps, "lengths": lengths, "survived": survived,
         "scores": scores, "median_score": float(np.median(scores)),
@@ -331,8 +368,11 @@ def quality_test(policy, starts: int = 20, max_steps: int = 10_000) -> dict:
         "fell_cart": fell_cart, "fell_pole": fell_pole, "median_len": float(np.median(lengths)),
         "mean_abs_x": float(np.mean(abs_x)), "mean_abs_theta": float(np.mean(abs_th)),
         "switch_rate": switches / max(1, sum(lengths) - starts),
-        "survival_x": grid.tolist(),
-        "survival": ([float(np.mean([o and L <= g for o, L in zip(ok, lengths)])) for g in grid] if SPEC.success_is_terminal
+        # the curve: CartPole-like = share still balancing at step t; MountainCar = share at the flag by step t;
+        # LunarLander = share of the starts scoring at least s
+        "survival_x": (score_grid if SPEC.measure == "score" else grid).tolist(),
+        "survival": ([float(np.mean([g >= s for g in scores])) for s in score_grid] if SPEC.measure == "score"
+                     else [float(np.mean([o and L <= g for o, L in zip(ok, lengths)])) for g in grid] if SPEC.success_is_terminal
                      else [float(np.mean([L >= g for L in lengths])) for g in grid]),
     }
 
@@ -391,23 +431,27 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
 
 def web_page() -> str:
     return "http://localhost:3000" + {"cartpole": "", "double_cartpole": "/double", "mountaincar": "/mountaincar",
-                                      "mountaincar_energy": "/mountaincar-energy"}.get(SPEC.key, "/double-joint")
+                                      "mountaincar_energy": "/mountaincar-energy", "lunarlander": "/lunarlander"}.get(
+        SPEC.key, "/double-joint")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--env", choices=["cartpole", "double_cartpole", "double_cartpole_joint", "mountaincar", "mountaincar_energy"],
+    ap.add_argument("--env", choices=["cartpole", "double_cartpole", "double_cartpole_joint", "mountaincar", "mountaincar_energy",
+                                      "lunarlander"],
                     default="cartpole",
                     help="cartpole (one stick), double_cartpole (two sticks on a free hinge, each ≤ 15° from "
                          "vertical), double_cartpole_joint (lower stick ≤ 30°, top stick bent ≤ 20° from it) "
                          "mountaincar (official MountainCar-v0: −1 per step, 200-step limit) or mountaincar_energy "
-                         "(+ a bonus for gaining energy in training: 10·(γΦ(s′) − Φ(s)))")
+                         "(+ a bonus for gaining energy in training: 10·(γΦ(s′) − Φ(s))) or lunarlander (LunarLander-v3, "
+                         "judged by its score, 200 = solved)")
     ap.add_argument("--algo", choices=[*ALGOS, "all"], default="batch_ac",
                     help="batch_ac | epochs | ratio | clip | gae | ppo, or all of them one after another")
-    ap.add_argument("--budget", type=int, default=200_000, help="environment steps to train for (the same for every algorithm)")
+    ap.add_argument("--budget", type=int, default=None,
+                    help="environment steps to train for, the same for every algorithm (default: 200,000; LunarLander 1,000,000)")
     ap.add_argument("--iters", type=int, default=None, help="optional maximum number of iterations")
     ap.add_argument("--batch", type=int, default=None, help="episodes per batch (episode-batch algorithms)")
-    ap.add_argument("--hidden", type=int, default=None, help="hidden units (one hidden layer); default 8")
+    ap.add_argument("--hidden", type=int, default=None, help="hidden units (one hidden layer); default 8, LunarLander 64")
     ap.add_argument("--actor-lr", type=float, default=None, help="default: the algorithm's own")
     ap.add_argument("--critic-lr", type=float, default=None, help="default: the algorithm's own")
     ap.add_argument("--gamma", type=float, default=0.99)
@@ -428,6 +472,10 @@ def main() -> None:
     SPEC = EnvSpec(args.env)
     if args.quality_steps is None:
         args.quality_steps = SPEC.quality_steps
+    if args.budget is None:
+        args.budget = SPEC.budget
+    if not SPEC.can_set_state:
+        args.truth_every = 0  # no ground-truth critic check (rollouts cannot start in a given state)
     if args.algo == "all":  # the whole ladder, one after another, no windows
         args.render_every, args.open = 0, False
         for algo in ALGOS:
@@ -456,11 +504,15 @@ def train(algo: str, args) -> None:
     status("running", 0)
     record_episode(None, 0, out_dir / "episodes", name="good")  # the hand-written policy, for comparison
 
-    target = "steps to the flag, lower is better (200 = never)" if SPEC.success_is_terminal else "steps balanced (500 = perfect)"
+    target = ("steps to the flag, lower is better (200 = never)" if SPEC.success_is_terminal
+              else "score, 200 = solved" if SPEC.measure == "score" else "steps balanced (500 = perfect)")
     ref_len, ref_ok, ref_score = evaluate(reference_action)
-    print(f"{SPEC.title} · reference policy ({SPEC.reference_text}): eval {ref_len:.0f} {target}, succeeds {ref_ok:.0%}")
+    ref_v = ref_score if SPEC.measure == "score" else ref_len
+    print(f"{SPEC.title} · reference policy ({SPEC.reference_text}): eval {ref_v:.0f} {target}, succeeds {ref_ok:.0%}")
     un_len, un_ok, un_score = evaluate(lambda s: greedy_action(session, s))
-    print(f"untrained policy: eval {un_len:.0f}, succeeds {un_ok:.0%}\n")
+    un_v = un_score if SPEC.measure == "score" else un_len
+    hidden = SPEC.hidden if args.hidden is None else args.hidden
+    print(f"untrained policy: eval {un_v:.0f}, succeeds {un_ok:.0%}   (budget {args.budget:,} env steps, hidden {hidden})\n")
     cols = ["iter", "ret", "env_steps", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "clip_frac", "agree", "p_good",
             "ce_good", "dir", "eval", "success", "eval_success", "score", "eval_score", "max_x", "true_err", "noise", "V_mean",
             "Vtrue_mean"]
@@ -566,9 +618,11 @@ def train(algo: str, args) -> None:
                 ep_writer.writerow({"iter": it, "epoch": e, **m})
             f_ep.flush()
             ev_txt = f"{ev:6.2f}" if ev == ev else "   n/a"
-            eval_txt = f"{row['eval']:5.0f}" if row["eval"] is not None else ""
+            ev_shown = row["eval_score"] if SPEC.measure == "score" else row["eval"]  # LunarLander: the eval score
+            eval_txt = f"{ev_shown:5.0f}" if ev_shown is not None else ""
             corr_txt = f"{corr:5.2f}" if corr == corr else "  n/a"
-            print(f"{it:4d} {mean_len:6.1f} {s['critic_loss']:10.2f} → {s['critic_loss_after']:9.2f} {rel:5.0%} {corr_txt} "
+            shown = score if SPEC.measure == "score" else mean_len  # LunarLander: the batch's mean score
+            print(f"{it:4d} {shown:6.1f} {s['critic_loss']:10.2f} → {s['critic_loss_after']:9.2f} {rel:5.0%} {corr_txt} "
                   f"{s['actor_loss']:8.3f} {s['entropy']:5.2f} {ev_txt} {s['mean_abs_adv']:6.2f} {kl:8.5f} {agree:6.0%} "
                   f"{p_good:6.2f} {ce_good:7.3f} {direction:5.2f} {eval_txt}")
             if truth_line:
@@ -639,9 +693,12 @@ def _draw(fig, axes, rows: list[dict], live: bool) -> None:
     t_it = [r["iter"] for r in rows if r["true_err"] is not None]
     panels = [
         (axes[0, 0], "1. Is the agent learning?  " + ("steps to the flag (200 = never reached)" if SPEC.success_is_terminal
+                                                       else "score (200 = solved)" if SPEC.measure == "score"
                                                        else "episode length (500 = perfect)"), [
-            ("batch: mean episode length", [r["ret"] for r in rows], it),
-            ("eval: most likely action, 10 fixed starts", [r["eval"] for r in rows if r["eval"] is not None], ev_it)], False),
+            ("batch: mean " + ("score" if SPEC.measure == "score" else "episode length"),
+             [r["score" if SPEC.measure == "score" else "ret"] for r in rows], it),
+            ("eval: most likely action, 10 fixed starts",
+             [r["eval_score" if SPEC.measure == "score" else "eval"] for r in rows if r["eval"] is not None], ev_it)], False),
         (axes[0, 1], "2. Is the actor learning?  (does not grow with episode length)", [
             (f"P(good action): {1 / SPEC.n_actions:.2f} = random → 1 perfect", [r["p_good"] for r in rows], it),
             ("most likely action = good action", [r["agree"] for r in rows], it),
@@ -675,13 +732,17 @@ def _print_scorecard(card: dict) -> None:
     ss = card["speed_stability"]
     fmt_steps = lambda v: f"{v:,}" if v is not None else "never"  # noqa: E731
     solved, good = (("all 10 eval starts reach the flag", "all batch episodes reach the flag") if SPEC.success_is_terminal
+                    else ("eval score ≥ 200", "batch score ≥ 200") if SPEC.measure == "score"
                     else ("eval 500", "batch ≥ 475"))
     print(f"  speed      {solved}: first at {fmt_steps(ss['eval500_steps'])} env steps (iteration {ss['eval500_iter']}); "
           f"{good}: first at {fmt_steps(ss['batch475_steps'])} (iteration {ss['batch475_iter']})")
     if ss["stay_475"] is not None:
         print(f"  stability  after that: {ss['stay_475']:.0%} of batches stayed solved, {ss['drops_below_250']} drops")
     for name, q in card["quality"].items():
-        if SPEC.success_is_terminal:
+        if SPEC.measure == "score":
+            print(f"  quality    {name:7s}: score ≥ 200 on {q['survived']}/{q['starts']} starts · median score {q['median_score']:.0f} · "
+                  f"{', '.join(f'{v} {k}' for k, v in q['outcomes'].items())} · switches action {q['switch_rate']:.0%} of steps")
+        elif SPEC.success_is_terminal:
             print(f"  quality    {name:7s}: reached the flag {q['survived']}/{q['starts']} within {q['max_steps']} steps · "
                   f"median {q['median_len']:.0f} steps · switches action {q['switch_rate']:.0%} of steps")
         else:
@@ -695,9 +756,14 @@ def _diagnose(rows: list[dict]) -> None:
     first = rows[:20]
     mean = lambda k, rs: float(np.nanmean([r[k] for r in rs]))  # noqa: E731
     print("\nIs it learning? (last 20 iterations vs first 20)")
-    better = (mean("ret", last) < 0.8 * mean("ret", first)) if SPEC.success_is_terminal else (mean("ret", last) > 1.5 * mean("ret", first))
-    print(f"  batch episode length {mean('ret', first):.0f} → {mean('ret', last):.0f}"
-          f"   ({'improving' if better else 'not clearly improving'})")
+    if SPEC.measure == "score":
+        better = mean("score", last) > mean("score", first) + 50
+        print(f"  batch score {mean('score', first):.0f} → {mean('score', last):.0f}"
+              f"   ({'improving' if better else 'not clearly improving'})")
+    else:
+        better = (mean("ret", last) < 0.8 * mean("ret", first)) if SPEC.success_is_terminal else (mean("ret", last) > 1.5 * mean("ret", first))
+        print(f"  batch episode length {mean('ret', first):.0f} → {mean('ret', last):.0f}"
+              f"   ({'improving' if better else 'not clearly improving'})")
     print(f"  agreement with the reference policy {mean('agree', first):.0%} → {mean('agree', last):.0%}")
     if mean("EV", last) < 0.2:
         print("  ! critic explained variance is low: V does not predict the returns, so A is mostly noise")
