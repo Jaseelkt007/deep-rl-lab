@@ -20,6 +20,33 @@ def test_clip_stops_the_push_beyond_the_trust_range():
     lp = torch.log(torch.tensor([0.75])).requires_grad_()
     actor_loss(lp, old, adv, None).backward()
     assert lp.grad.item() == pytest.approx(-2.0)
+    # ratio, no clip: −r·A keeps pushing, and harder as r grows (gradient −A·r)
+    lp = torch.log(torch.tensor([0.75])).requires_grad_()
+    actor_loss(lp, old, adv, None, ratio=True).backward()
+    assert lp.grad.item() == pytest.approx(-2.0 * 1.5, rel=1e-5)
+
+
+def test_ratio_equals_plain_in_the_first_epoch():
+    """r = 1 before any update, so the first gradient step of 'ratio' is the plain one."""
+    torch.manual_seed(0)
+    logits = torch.randn(6, 2)
+    acts, adv = torch.tensor([0, 1, 1, 0, 1, 0]), torch.randn(6)
+    grads = []
+    for ratio in (False, True):
+        z = logits.clone().requires_grad_()
+        lp = torch.log_softmax(z, -1)[torch.arange(6), acts]
+        actor_loss(lp, lp.detach(), adv, None, ratio).backward()
+        grads.append(z.grad)
+    assert torch.allclose(grads[0], grads[1], atol=1e-6)
+
+
+def test_per_epoch_measurements():
+    s = PPOSession(PPOConfig(**{**VARIANTS["clip"], "seed": 3}))
+    pe = s.iterate()["summary"]["per_epoch"]
+    assert len(pe) == 10 and all(e["kl"] >= 0 and 0 <= e["past"] <= 1 for e in pe)
+    assert pe[-1]["kl"] > pe[0]["kl"]  # the policy moves further with every epoch
+    assert all(e["r_hi"] is None or e["r_hi"] <= e["r_max"] + 1e-6 for e in pe)
+    assert all(e["r_lo"] is None or e["r_lo"] >= e["r_min"] - 1e-6 for e in pe)
 
 
 def test_lambda_one_gives_monte_carlo_advantage_and_zero_gives_td_error():
@@ -62,5 +89,6 @@ def test_gradient_steps_are_epochs_times_minibatches():
 def test_variants_are_valid_and_one_switch_apart():
     for name, over in VARIANTS.items():
         PPOConfig(**over)
-    assert VARIANTS["clip"] == {**VARIANTS["epochs"], "clip": 0.2}
+    assert VARIANTS["ratio"] == {**VARIANTS["epochs"], "ratio": True}
+    assert VARIANTS["clip"] == {**VARIANTS["ratio"], "clip": 0.2}
     assert VARIANTS["gae"] == {**VARIANTS["clip"], "gae_lambda": 0.95}

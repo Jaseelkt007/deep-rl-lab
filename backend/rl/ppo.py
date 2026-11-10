@@ -12,8 +12,12 @@ One iteration:
   3. For each of K epochs: shuffle the steps, split them into minibatches, and for each
      minibatch take one gradient step for the critic and one for the actor:
         critic:  L_V = mean ½ (target − V(s))²
-        actor:   no clip:  L_π = −mean A · log π(a|s)
-                 clip ε:   r = π(a|s) / π_old(a|s),  L_π = −mean min(r·A, clip(r, 1−ε, 1+ε)·A)
+        actor:   plain:    L_π = −mean A · log π(a|s)              (ignores that the data came from π_old)
+                 ratio:    L_π = −mean r · A,  r = π(a|s) / π_old(a|s)   (corrects for it; r = 1 in epoch 1,
+                                                                    so the first step equals plain)
+                 clip ε:   L_π = −mean min(r·A, clip(r, 1−ε, 1+ε)·A)    (ratio + a brake)
+     After every epoch, measure on the whole batch how far the policy has moved from π_old
+     (KL, the ratio r on steps with A > 0 and A < 0, the share of steps past the clip limit).
   4. Throw the batch away.
 
 With epochs = 1, minibatch = whole batch, clip = None, λ = 1 and 5-episode batches this is
@@ -45,7 +49,8 @@ class PPOConfig(BaseModel):
     gae_lambda: float = Field(1.0, ge=0, le=1)  # 1 = Monte Carlo returns (our batch actor-critic)
     epochs: int = Field(1, ge=1, le=100)  # passes over the same batch
     minibatch: int | None = Field(None, ge=1)  # None = the whole batch in one gradient step
-    clip: float | None = Field(None, gt=0, lt=1)  # None = no importance ratio, plain −A·log π
+    ratio: bool = False  # True: −r·A with r = π/π_old (no clip); False: plain −A·log π
+    clip: float | None = Field(None, gt=0, lt=1)  # ε: −min(r·A, clip(r, 1−ε, 1+ε)·A); uses the ratio
     batch_episodes: int | None = Field(5, ge=1)  # a batch = N complete episodes ...
     batch_steps: int | None = Field(None, ge=1)  # ... or exactly N steps (cut episodes continue)
     adv_norm: bool = False  # normalise A to mean 0, std 1 per minibatch
@@ -54,20 +59,44 @@ class PPOConfig(BaseModel):
 # The ladder from our batch actor-critic to PPO: each rung adds one thing to the one before.
 VARIANTS: dict[str, dict] = {
     "epochs": {"epochs": 10},
-    "clip": {"epochs": 10, "clip": 0.2},
-    "gae": {"epochs": 10, "clip": 0.2, "gae_lambda": 0.95},
-    "ppo": {"epochs": 10, "clip": 0.2, "gae_lambda": 0.95, "batch_episodes": None, "batch_steps": 2048,
+    "ratio": {"epochs": 10, "ratio": True},
+    "clip": {"epochs": 10, "ratio": True, "clip": 0.2},
+    "gae": {"epochs": 10, "ratio": True, "clip": 0.2, "gae_lambda": 0.95},
+    "ppo": {"epochs": 10, "ratio": True, "clip": 0.2, "gae_lambda": 0.95, "batch_episodes": None, "batch_steps": 2048,
             "minibatch": 64, "adv_norm": True, "actor_lr": 1e-3, "critic_lr": 3e-3},
 }
 
 
-def actor_loss(logp: torch.Tensor, logp_old: torch.Tensor, adv: torch.Tensor, clip: float | None) -> torch.Tensor:
-    """No clip: −mean A·log π (our actor-critic).  Clip ε: −mean min(r·A, clip(r, 1−ε, 1+ε)·A),
-    r = π/π_old. Where r has already moved past 1±ε in the direction A pushes, the gradient is 0."""
-    if clip is None:
+def actor_loss(logp: torch.Tensor, logp_old: torch.Tensor, adv: torch.Tensor, clip: float | None,
+               ratio: bool = False) -> torch.Tensor:
+    """plain: −mean A·log π (our actor-critic).  ratio: −mean r·A, r = π/π_old, no limit.
+    clip ε: −mean min(r·A, clip(r, 1−ε, 1+ε)·A): where r has already moved past 1±ε in the
+    direction A pushes, the gradient is 0."""
+    if clip is None and not ratio:
         return -(adv * logp).mean()
-    ratio = torch.exp(logp - logp_old)
-    return -torch.min(ratio * adv, torch.clamp(ratio, 1 - clip, 1 + clip) * adv).mean()
+    r = torch.exp(logp - logp_old)
+    if clip is None:
+        return -(r * adv).mean()
+    return -torch.min(r * adv, torch.clamp(r, 1 - clip, 1 + clip) * adv).mean()
+
+
+@torch.no_grad()
+def policy_move(log_probs_old: torch.Tensor, log_probs_new: torch.Tensor, acts: torch.Tensor, adv: torch.Tensor,
+                eps: float = 0.2) -> dict:
+    """How far the policy has moved from π_old on the batch states (all actions, not only the taken ones)."""
+    idx = torch.arange(len(acts))
+    kl = float((log_probs_old.exp() * (log_probs_old - log_probs_new)).sum(-1).mean())
+    r = torch.exp(log_probs_new[idx, acts] - log_probs_old[idx, acts])
+    pos, neg = adv > 0, adv < 0
+    past = (pos & (r > 1 + eps)) | (neg & (r < 1 - eps))  # where the clip would stop the push
+    return {"kl": kl, "past": float(past.float().mean()),
+            "r_pos": float(r[pos].mean()) if pos.any() else None,
+            "r_neg": float(r[neg].mean()) if neg.any() else None,
+            # the 10 % of steps that moved most in the direction A pushes (the mean hides them:
+            # similar states with different actions pull against each other)
+            "r_hi": float(torch.quantile(r[pos], 0.9)) if pos.any() else None,
+            "r_lo": float(torch.quantile(r[neg], 0.1)) if neg.any() else None,
+            "r_max": float(r.max()), "r_min": float(r.min())}
 
 
 class PPOSession:
@@ -175,6 +204,9 @@ class PPOSession:
 
         mb = cfg.minibatch or n
         steps = 0
+        # the sign A has in the loss (with normalisation: relative to the batch mean)
+        adv_sign = adv_all - adv_all.mean() if cfg.adv_norm else adv_all
+        per_epoch = []
         for _ in range(cfg.epochs):
             order = torch.randperm(n, generator=self.shuffle_gen)
             for start in range(0, n, mb):
@@ -190,11 +222,13 @@ class PPOSession:
                 self.critic_opt.step()
                 # actor
                 logp = F.log_softmax(self.actor(Xb[idx]), -1)[torch.arange(len(idx)), Ab[idx]]
-                loss_pi = actor_loss(logp, logp_old[idx], adv, cfg.clip)
+                loss_pi = actor_loss(logp, logp_old[idx], adv, cfg.clip, cfg.ratio)
                 self.actor_opt.zero_grad()
                 loss_pi.backward()
                 self.actor_opt.step()
                 steps += 1
+            with torch.no_grad():  # after this epoch: how far from π_old?
+                per_epoch.append(policy_move(log_probs0, F.log_softmax(self.actor(Xb), -1), Ab, adv_sign, cfg.clip or 0.2))
 
         with torch.no_grad():
             log_probs1 = F.log_softmax(self.actor(Xb), -1)
@@ -210,6 +244,7 @@ class PPOSession:
             "critic_loss": critic_loss0, "critic_loss_after": critic_loss1, "actor_loss": actor_loss0,
             "entropy": entropy, "ev": explained_variance(V.tolist(), target.tolist()),
             "mean_abs_adv": float(np.abs(A).mean()), "grad_steps": steps, "clip_frac": clip_frac,
+            "per_epoch": per_epoch,
         }
         return {
             "k": self.k, "summary": summary, "episodes": segments,

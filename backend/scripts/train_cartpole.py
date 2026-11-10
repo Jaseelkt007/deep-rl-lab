@@ -7,8 +7,9 @@
 
 --algo (each adds one thing to the one before; rl/ppo.py):
     batch_ac  5 episodes → 1 gradient step → throw away (rl/explain.py)
-    epochs    + 10 epochs: 10 gradient steps on the same batch
-    clip      + importance ratio r = π/π_old, loss −min(r·A, clip(r, 1−ε, 1+ε)·A), ε = 0.2
+    epochs    + 10 epochs: 10 gradient steps on the same batch, plain loss −A·log π
+    ratio     + importance ratio r = π/π_old: loss −r·A (corrects for the data coming from π_old, no limit)
+    clip      + clip: loss −min(r·A, clip(r, 1−ε, 1+ε)·A), ε = 0.2 (stops the push once r is past 1±ε)
     gae       + GAE λ = 0.95: A from the critic's one-step errors δ instead of G − V
     ppo       + 2,048-step batches, minibatches of 64, normalised advantages, lr 1e-3 / 3e-3
 Every algorithm trains for the same --budget of environment steps (default 200,000).
@@ -18,6 +19,10 @@ The LATEST run of each algorithm is saved in runs/cli/<algo>/ (cleared when that
     episodes/iterNNNN.json + .gif   the current policy playing one episode at iteration 1, every
                                     --record-every iterations and at the end (JSON = for the web page)
     episodes/good.json + .gif       the hand-written good policy on the same start, for comparison
+    per_epoch.csv                   inside every iteration, after each epoch: KL(π_old ‖ π), the share of
+                                    steps past the clip limit (A > 0 and r > 1.2, or A < 0 and r < 0.8),
+                                    the ratio r on steps with A > 0 (mean, 90th percentile) and A < 0
+                                    (mean, 10th percentile), the largest and smallest r
 The web page http://localhost:3000 shows and compares them (live while training).
 
 One batch_ac iteration (same code as the Learn page, rl/explain.py):
@@ -88,8 +93,9 @@ from rl.ppo import VARIANTS, PPOConfig, PPOSession  # noqa: E402
 # The ladder: our batch actor-critic, then one more piece of PPO per rung.
 ALGOS = {
     "batch_ac": "Batch Actor-Critic (1 gradient step per batch)",
-    "epochs": "+ 10 epochs on each batch (no clip)",
-    "clip": "+ importance ratio and clip ε = 0.2",
+    "epochs": "+ 10 epochs on each batch (plain −A·log π)",
+    "ratio": "+ importance ratio r = π/π_old (loss −r·A, no clip)",
+    "clip": "+ clip ε = 0.2 (loss −min(r·A, clip(r)·A))",
     "gae": "+ GAE λ = 0.95",
     "ppo": "PPO (2,048-step batches, minibatches of 64, advantage normalisation)",
 }
@@ -261,7 +267,7 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--algo", choices=[*ALGOS, "all"], default="batch_ac",
-                    help="batch_ac | epochs | clip | gae | ppo, or all of them one after another")
+                    help="batch_ac | epochs | ratio | clip | gae | ppo, or all of them one after another")
     ap.add_argument("--budget", type=int, default=200_000, help="environment steps to train for (the same for every algorithm)")
     ap.add_argument("--iters", type=int, default=None, help="optional maximum number of iterations")
     ap.add_argument("--batch", type=int, default=None, help="episodes per batch (episode-batch algorithms)")
@@ -332,6 +338,11 @@ def train(algo: str, args) -> None:
     f = open(csv_path, "w", newline="")
     writer = csv.DictWriter(f, fieldnames=cols)
     writer.writeheader()
+    # inside each iteration: how far the policy is from π_old after every epoch (1 row per epoch)
+    f_ep = open(out_dir / "per_epoch.csv", "w", newline="")
+    ep_cols = ["iter", "epoch", "kl", "past", "r_pos", "r_neg", "r_hi", "r_lo", "r_max", "r_min"]
+    ep_writer = csv.DictWriter(f_ep, fieldnames=ep_cols)
+    ep_writer.writeheader()
     it = 0
     env_steps = 0  # environment steps used so far: the fair x-axis between algorithms
     completed = False
@@ -379,6 +390,20 @@ def train(algo: str, args) -> None:
             rows.append(row)
             writer.writerow(row)
             f.flush()
+            if "per_epoch" in s:
+                moves = s["per_epoch"]
+            else:  # batch actor-critic: one gradient step = one "epoch"
+                r = np.exp(dlogp)
+                pos, neg = adv > 0, adv < 0
+                moves = [{"kl": kl, "past": float(np.mean((pos & (r > 1.2)) | (neg & (r < 0.8)))),
+                          "r_pos": float(r[pos].mean()) if pos.any() else None,
+                          "r_neg": float(r[neg].mean()) if neg.any() else None,
+                          "r_hi": float(np.quantile(r[pos], 0.9)) if pos.any() else None,
+                          "r_lo": float(np.quantile(r[neg], 0.1)) if neg.any() else None,
+                          "r_max": float(r.max()), "r_min": float(r.min())}]
+            for e, m in enumerate(moves, start=1):
+                ep_writer.writerow({"iter": it, "epoch": e, **m})
+            f_ep.flush()
             ev_txt = f"{ev:6.2f}" if ev == ev else "   n/a"
             eval_txt = f"{row['eval']:5.0f}" if row["eval"] is not None else ""
             corr_txt = f"{corr:5.2f}" if corr == corr else "  n/a"
@@ -408,6 +433,7 @@ def train(algo: str, args) -> None:
         completed = True
     finally:
         f.close()
+        f_ep.close()
 
     if not rows:
         return
