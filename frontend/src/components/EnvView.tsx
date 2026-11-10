@@ -191,6 +191,86 @@ function drawDoubleCartPole(ctx: CanvasRenderingContext2D, W: number, H: number,
   }
 }
 
+/** LunarLander from its 8 numbers: x (±1 = edge), y (0 = pad height), angle, leg contacts; the flame shows the
+ *  engine that fires. The real terrain is not in the state, so the ground is drawn flat with the pad's flags. */
+function drawLunarLander(ctx: CanvasRenderingContext2D, W: number, H: number, step: StepRec | null, actionName: string | null) {
+  const m = 10;
+  const px = (x: number) => m + ((x + 1.05) / 2.1) * (W - 2 * m);
+  const ground = H - 18;
+  const py = (y: number) => ground - (y / 1.65) * (ground - 12);
+  ctx.strokeStyle = C.axis;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(m, ground);
+  ctx.lineTo(W - m, ground);
+  ctx.stroke();
+  for (const fx of [-0.2, 0.2]) {
+    const x = px(fx);
+    ctx.strokeStyle = C.ink2;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, ground);
+    ctx.lineTo(x, ground - 22);
+    ctx.stroke();
+    ctx.fillStyle = "#e8b100";
+    ctx.beginPath();
+    ctx.moveTo(x, ground - 22);
+    ctx.lineTo(x + 9, ground - 18);
+    ctx.lineTo(x, ground - 14);
+    ctx.closePath();
+    ctx.fill();
+  }
+  for (const ex of [-1, 1]) {
+    ctx.strokeStyle = C.neg;
+    ctx.beginPath();
+    ctx.moveTo(px(ex), ground - 6);
+    ctx.lineTo(px(ex), ground + 6);
+    ctx.stroke();
+  }
+  if (!step) return;
+  const [x, y, , , angle, , legL, legR] = step.s;
+  ctx.save();
+  ctx.translate(px(x), py(y) - 14); // the body sits above its legs; y = 0 means the legs touch the pad
+  ctx.rotate(-angle); // Box2D: positive angle = counter-clockwise; the canvas y axis points down
+  // flames (drawn first, under the body)
+  const flame = (fx: number, fy: number, dx: number, dy: number) => {
+    ctx.fillStyle = "#f19463";
+    ctx.beginPath();
+    ctx.moveTo(fx - dy * 4, fy + dx * 4);
+    ctx.lineTo(fx + dx * 14, fy + dy * 14);
+    ctx.lineTo(fx + dy * 4, fy - dx * 4);
+    ctx.closePath();
+    ctx.fill();
+  };
+  if (actionName === "main engine") flame(0, 9, 0, 1);
+  if (actionName === "left engine") flame(-13, 0, -1, 0);
+  if (actionName === "right engine") flame(13, 0, 1, 0);
+  // legs
+  ctx.lineWidth = 2.5;
+  for (const [side, down] of [
+    [-1, legL],
+    [1, legR],
+  ] as const) {
+    ctx.strokeStyle = down > 0.5 ? C.pos : C.ink2;
+    ctx.beginPath();
+    ctx.moveTo(side * 9, 6);
+    ctx.lineTo(side * 15, 15);
+    ctx.stroke();
+  }
+  // body
+  ctx.fillStyle = "#6250d6";
+  ctx.beginPath();
+  ctx.moveTo(-9, -9);
+  ctx.lineTo(9, -9);
+  ctx.lineTo(12, 0);
+  ctx.lineTo(12, 7);
+  ctx.lineTo(-12, 7);
+  ctx.lineTo(-12, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 export default function EnvView({
   envId,
   step,
@@ -217,6 +297,7 @@ export default function EnvView({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, H);
     if (envId === "MountainCar-v0") drawMountainCar(ctx, W, H, step, trail, actionName);
+    else if (envId === "LunarLander-v3") drawLunarLander(ctx, W, H, step, actionName);
     else if (envId === "DoubleCartPole-v0" || envId === "DoubleCartPoleJoint-v0") drawDoubleCartPole(ctx, W, H, step, actionName);
     else drawCartPole(ctx, W, H, step, actionName);
   }, [envId, step, trail, actionName]);

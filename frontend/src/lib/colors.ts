@@ -30,8 +30,17 @@ export const C = {
 };
 
 // Actions: left / none / right (CartPole: left / right)
-export const ACTION_COLORS: Record<string, string> = { left: "#6250d6", none: "#9a9890", right: "#eda100" };
-export const ACTION_GLYPH: Record<string, string> = { left: "←", none: "·", right: "→" };
+export const ACTION_COLORS: Record<string, string> = {
+  left: "#6250d6",
+  none: "#9a9890",
+  right: "#eda100",
+  // LunarLander: the engine that fires (left / right = the side engines, main = the one underneath)
+  nothing: "#9a9890",
+  "left engine": "#6250d6",
+  "main engine": "#e87ba4",
+  "right engine": "#eda100",
+};
+export const ACTION_GLYPH: Record<string, string> = { left: "←", none: "·", right: "→", nothing: "·", "left engine": "◂", "main engine": "▾", "right engine": "▸" };
 
 type RGB = [number, number, number];
 const hex = (h: string): RGB => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as RGB;
