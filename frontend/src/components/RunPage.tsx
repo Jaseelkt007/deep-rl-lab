@@ -58,6 +58,9 @@ interface Quality {
   switch_rate: number;
   survival_x: number[];
   survival: number[];
+  scores?: number[]; // the final test's score per start
+  median_score?: number;
+  outcomes?: Record<string, number>; // LunarLander: how the episodes ended
 }
 interface Scorecard {
   speed_stability: {
@@ -78,7 +81,16 @@ interface AlgoSummary {
   settings: Settings;
   status: Status;
   scorecard: Scorecard | null;
-  speed: { iter: number; env_steps: number; ret: number; eval: number | null; KL?: number | null; clip_frac?: number | null }[];
+  speed: {
+    iter: number;
+    env_steps: number;
+    ret: number;
+    eval: number | null;
+    KL?: number | null;
+    clip_frac?: number | null;
+    score?: number | null;
+    eval_score?: number | null;
+  }[];
   inner: Inner | null;
 }
 interface EpisodeInfo {
@@ -87,6 +99,8 @@ interface EpisodeInfo {
   steps: number;
   terminated: boolean;
   kind?: "greedy" | "training" | "good"; // greedy: most likely action from the fixed start; training: a real batch episode
+  score?: number | null; // its return with the official reward
+  outcome?: string | null; // LunarLander: landed / crashed / flew away / time limit
 }
 type Mode = "greedy" | "training";
 /** greedy recordings and training episodes; runs from before training episodes were recorded have no `kind` */
@@ -214,7 +228,7 @@ interface Trace {
   dash?: number[];
 }
 export interface EnvCfg {
-  key: "cartpole" | "double_cartpole" | "double_cartpole_joint" | "mountaincar" | "mountaincar_energy";
+  key: "cartpole" | "double_cartpole" | "double_cartpole_joint" | "mountaincar" | "mountaincar_energy" | "lunarlander";
   envId: EnvId;
   title: string;
   tab: string;
@@ -233,7 +247,7 @@ export interface EnvCfg {
   angleColumn: string; // the quality test's angle measure
   /** "limit": success = still going at the time limit, longer is better (the cart-poles).
    *  "flag": success = the episode ends at the goal, shorter is better (MountainCar). */
-  success: "limit" | "flag";
+  success: "limit" | "flag" | "score"; // score: success = a score of at least 200 (LunarLander)
   lengthMax: number; // the time limit (y-axis of the length charts)
   label: {
     length: string; // what an episode's length means
@@ -439,6 +453,49 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
       curve: "Quality: share of the 20 starts that have reached the flag by step t (final policy)",
     },
   },
+  lunarlander: {
+    key: "lunarlander",
+    envId: "LunarLander-v3",
+    title: "LunarLander",
+    tab: "LunarLander",
+    href: "/lunarlander",
+    command: (algo) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --env lunarlander --algo ${algo}`,
+    actions: ["nothing", "left engine", "main engine", "right engine"],
+    state: [
+      { name: "x (0 = pad centre)", unit: "", range: "±1 = edge (end)", scale: 1 },
+      { name: "y (0 = pad height)", unit: "", range: "−0.2 … 1.6", scale: 0.9, offset: 0.7 },
+      { name: "x velocity", unit: "", range: "÷2", scale: 2 },
+      { name: "y velocity", unit: "", range: "÷2", scale: 2 },
+      { name: "angle", unit: "rad", range: "÷2", scale: 2, deg: true },
+      { name: "angular velocity", unit: "rad/s", range: "÷4", scale: 4 },
+      { name: "left leg down", unit: "", range: "0 or 1", scale: 0.5, offset: 0.5 },
+      { name: "right leg down", unit: "", range: "0 or 1", scale: 0.5, offset: 0.5 },
+    ],
+    reward: "shaped: closer to the pad, slower and level is better; each leg touching +10; main engine −0.3 and side engines −0.03 per step; +100 for landing, −100 for crashing",
+    ends: "terminated: landed (comes to rest), crashed (the body touches the ground) or flew away (|x| ≥ 1) · truncated: 1,000 steps",
+    goodPolicy: "Gymnasium's hand-written heuristic",
+    goodAction: () => 0,
+    traces: [
+      { label: "x", f: (s) => s[0], color: C.ink },
+      { label: "height y / 1.6", f: (s) => s[1] / 1.6, color: "#6250d6" },
+      { label: "angle / 1 rad", f: (s) => s[4], color: C.critic },
+    ],
+    traceNote: "x (±1 = the edges), height y / 1.6 and the angle in rad",
+    endText: (_s, n) => `ended after ${n} steps`,
+    status: (s) => `x ${s[0].toFixed(2)} · y ${s[1].toFixed(2)} · angle ${(s[4] * DEG).toFixed(1)}°${s[6] > 0.5 || s[7] > 0.5 ? " · leg down" : ""}`,
+    angleColumn: "mean |angle|",
+    success: "score",
+    lengthMax: 1000,
+    label: {
+      length: "score (200 = solved)",
+      speed: "speed: steps until the greedy policy averages ≥ 200",
+      firstGood: "first batch averaging ≥ 200",
+      stays: "stability: stays ≥ 200",
+      quality: () => "score ≥ 200 (final test)",
+      median: "median score",
+      curve: "Quality: share of the 20 starts scoring at least s (final policy)",
+    },
+  },
 };
 const EnvCtx = createContext<EnvCfg>(ENVS.cartpole);
 const useEnv = () => useContext(EnvCtx);
@@ -537,11 +594,13 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
 
   const speed = useMemo(() => {
     const curves = have.map((l) => {
+      // LunarLander is judged by its score, the others by their episode length
+      const key = env.success === "score" ? (speedY === "ret" ? "score" : "eval_score") : speedY;
       const pts = by[l.key]!.speed.filter((p) => speedY === "ret" || p.eval != null);
-      return { x: pts.map((p) => p.env_steps), y: pts.map((p) => p[speedY]) };
+      return { x: pts.map((p) => p.env_steps), y: pts.map((p) => p[key] ?? null) };
     });
     return { ...overlay(curves), series: have.map((l) => ({ label: l.tab, color: l.color, width: l.key === "ppo" ? 2 : 1.75 })) };
-  }, [have, by, speedY]);
+  }, [have, by, speedY, env.success]);
 
   const kl = useMemo(() => {
     const curves = have.map((l) => {
@@ -613,7 +672,10 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
   const bestStay = best(cards.map((c) => c.speed_stability.stay_475), true);
   const bestSurv = best(cards.map((c) => c.quality.learned.survived), true);
   const flag = env.success === "flag";
-  const bestMedian = best(cards.map((c) => c.quality.learned.median_len), !flag); // MountainCar: fewer steps is better
+  const bestMedian = best(
+    cards.map((c) => (env.success === "score" ? c.quality.learned.median_score : c.quality.learned.median_len)),
+    !flag,
+  ); // MountainCar: fewer steps is better; LunarLander: the median score
 
   const cell = "px-2 py-1.5 text-right tabular-nums";
   const head = "px-2 py-1 text-right font-normal";
@@ -626,10 +688,24 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
         </B>
       </td>
       <td className={cell}>
-        <B on={bold && q.median_len === bestMedian}>{Math.round(q.median_len).toLocaleString()}</B>
+        <B on={bold && (env.success === "score" ? q.median_score : q.median_len) === bestMedian}>
+          {Math.round((env.success === "score" ? q.median_score : q.median_len) ?? 0).toLocaleString()}
+        </B>
       </td>
-      {!flag && <td className={cell}>{q.mean_abs_x.toFixed(2)} m</td>}
+      {!flag && (
+        <td className={cell}>
+          {q.mean_abs_x.toFixed(2)}
+          {env.success === "score" ? "" : " m"}
+        </td>
+      )}
       {!flag && <td className={cell}>{q.mean_abs_theta.toFixed(3)} rad</td>}
+      {env.success === "score" && (
+        <td className={cell}>
+          {Object.entries(q.outcomes ?? {})
+            .map(([k, v]) => `${v} ${k}`)
+            .join(" · ") || "–"}
+        </td>
+      )}
       <td className={cell}>{(q.switch_rate * 100).toFixed(0)}%</td>
     </>
   );
@@ -651,8 +727,9 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
                 <th className={head}>{env.label.stays}</th>
                 <th className={head}>{env.label.quality(maxSteps)}</th>
                 <th className={head}>{env.label.median}</th>
-                {!flag && <th className={head}>mean |cart position|</th>}
+                {!flag && <th className={head}>{env.success === "score" ? "mean |x| (0 = pad)" : "mean |cart position|"}</th>}
                 {!flag && <th className={head}>{env.angleColumn}</th>}
+                {env.success === "score" && <th className={head}>how the 20 ended</th>}
                 <th className={head}>action switches</th>
               </tr>
             </thead>
@@ -724,7 +801,7 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
             <div>
               <div className="flex items-center gap-2 text-[11.5px] font-medium text-neutral-700">
-                Speed: episode length vs environment steps
+                Speed: {env.success === "score" ? "score" : "episode length"} vs environment steps
                 <span className="ml-auto flex rounded bg-neutral-100 p-0.5 text-[11px] font-normal">
                   {(
                     [
@@ -738,9 +815,18 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
                   ))}
                 </span>
               </div>
-              <UChart x={speed.x} ys={speed.ys} series={speed.series} height={180} yRange={[0, env.lengthMax * 1.04]} xLabel="environment steps" />
+              <UChart
+                x={speed.x}
+                ys={speed.ys}
+                series={speed.series}
+                height={180}
+                yRange={env.success === "score" ? [-450, 320] : [0, env.lengthMax * 1.04]}
+                xLabel="environment steps"
+              />
               <div className="text-[11px] text-neutral-400">
-                {speedY === "ret" ? "batch: mean length of the episodes played while learning (sampled actions)" : "greedy: most likely action, 10 fixed starts, every 10 iterations"}
+                {speedY === "ret"
+                  ? `batch: mean ${env.success === "score" ? "score" : "length"} of the episodes played while learning (sampled actions)`
+                  : "greedy: most likely action, 10 fixed starts, every 10 iterations"}
               </div>
             </div>
             <div>
@@ -751,7 +837,7 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
             <div>
               <div className="text-[11.5px] font-medium text-neutral-700">{env.label.curve}</div>
               {surv.ys.length ? (
-                <UChart x={surv.x} ys={surv.ys} series={surv.series} height={180} yRange={[0, 1]} xLabel="step" />
+                <UChart x={surv.x} ys={surv.ys} series={surv.series} height={180} yRange={[0, 1]} xLabel={env.success === "score" ? "score" : "step"} />
               ) : (
                 <div className="py-10 text-center text-[12px] text-neutral-400">appears when a run finishes</div>
               )}
@@ -764,7 +850,7 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
             <div className="mb-1 border-t border-neutral-100 pt-3 text-[12px] font-medium text-neutral-800">
               Inside one batch: how far the policy has moved from π_old after each epoch
               <span className="ml-2 text-[11px] font-normal text-neutral-500">
-                average over the iterations that were still learning ({env.success === "flag" ? "not every episode reached the flag" : "batch mean < 475"}; afterwards A ≈ 0 and nothing moves) · iterations: {inner.note}
+                average over the iterations that were still learning ({env.success === "flag" ? "not every episode reached the flag" : env.success === "score" ? "batch score < 200" : "batch mean < 475"}; afterwards A ≈ 0 and nothing moves) · iterations: {inner.note}
               </span>
             </div>
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -956,7 +1042,7 @@ function Episodes({ data }: { data: RunData }) {
           >
             {learned.map((e) => (
               <option key={e.name} value={e.name}>
-                {e.iter === finalIter ? "final " : ""}iteration {e.iter}: {e.steps} steps
+                {e.iter === finalIter ? "final " : ""}iteration {e.iter}: {env.success === "score" ? `score ${Math.round(e.score ?? 0)}` : `${e.steps} steps`}
               </option>
             ))}
           </select>
@@ -969,7 +1055,7 @@ function Episodes({ data }: { data: RunData }) {
               onClick={() => setSel(e.name)}
               className={`rounded border px-2 py-0.5 text-[12px] tabular-nums ${e.name === current ? "border-neutral-900 bg-neutral-900 text-white" : isFinal ? "border-[#2a78d6] bg-white text-[#2a78d6]" : "border-neutral-300 bg-white"}`}
             >
-              {isFinal ? `final ${e.iter}` : e.iter}: {e.steps}
+              {isFinal ? `final ${e.iter}` : e.iter}: {env.success === "score" ? Math.round(e.score ?? 0) : e.steps}
             </button>
           );
         })}
@@ -978,7 +1064,7 @@ function Episodes({ data }: { data: RunData }) {
             onClick={() => setSel(good.name)}
             className={`ml-2 rounded border px-2 py-0.5 text-[12px] tabular-nums ${good.name === current ? "border-[#1baf7a] bg-[#1baf7a] text-white" : "border-[#1baf7a] bg-white text-[#0b7a52]"}`}
           >
-            good policy: {good.steps}
+            good policy: {env.success === "score" ? Math.round(good.score ?? 0) : good.steps}
           </button>
         )}
         <span className="ml-auto text-[11px] text-neutral-400">iteration: {env.label.length}</span>
@@ -1043,7 +1129,9 @@ function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
           const step = { s, a: sd.ep.actions[j], p: sd.ep.probs[j] } as unknown as StepRec;
           const atEnd = pb.i >= len - 1;
           // a badge when the episode is over: CartPole-like only for a failure; MountainCar for both outcomes
-          const badge = !atEnd ? null : env.success === "flag"
+          const badge = !atEnd ? null : env.success === "score"
+            ? { ok: (sd.ep.score ?? -1e9) >= 200, text: `${sd.ep.outcome ?? "ended"} · score ${Math.round(sd.ep.score ?? 0)}` }
+            : env.success === "flag"
             ? sd.ep.terminated
               ? { ok: true, text: endText(sd.ep, env) }
               : { ok: false, text: `never reached the flag (${len} steps)` }
@@ -1575,13 +1663,24 @@ function AlgoDetail({ data }: { data: RunData }) {
       {rows.length > 0 && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           <Chart
-            title="Agent: episode length"
-            help={`Batch: mean length of the episodes that ended in this batch (sampled actions). Eval: the most likely action, 10 fixed starts. ${env.success === "flag" ? "Steps to the flag: lower is better, 200 = never reached." : "500 = perfect."}`}
+            title={env.success === "score" ? "Agent: score" : "Agent: episode length"}
+            help={
+              env.success === "score"
+                ? "Batch: mean score of the episodes that ended in this batch (sampled actions). Eval: the most likely action, 10 fixed starts. 200 = solved; random pushes score about −210."
+                : `Batch: mean length of the episodes that ended in this batch (sampled actions). Eval: the most likely action, 10 fixed starts. ${env.success === "flag" ? "Steps to the flag: lower is better, 200 = never reached." : "500 = perfect."}`
+            }
             rows={rows}
-            series={[
-              { key: "ret", label: "batch", color: C.ink },
-              { key: "eval", label: "eval", color: C.pos },
-            ]}
+            series={
+              env.success === "score"
+                ? [
+                    { key: "score", label: "batch", color: C.ink },
+                    { key: "eval_score", label: "eval", color: C.pos },
+                  ]
+                : [
+                    { key: "ret", label: "batch", color: C.ink },
+                    { key: "eval", label: "eval", color: C.pos },
+                  ]
+            }
           />
           {env.success === "flag" && (
             <Chart
@@ -1774,8 +1873,10 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
                           ? `${a.status.state}… ${num(a.status.env_steps)} steps`
                           : a.scorecard
                             ? speed != null
-                              ? `${env.success === "flag" ? "solved" : "500"} after ${num(speed)} steps`
-                              : env.success === "flag"
+                              ? `${env.success === "flag" ? "solved" : env.success === "score" ? "200" : "500"} after ${num(speed)} steps`
+                              : env.success === "score"
+                                ? "never reached 200"
+                                : env.success === "flag"
                                 ? "never solved"
                                 : "never reached 500"
                             : (a.status.state ?? "")}
