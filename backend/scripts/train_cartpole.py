@@ -75,6 +75,7 @@ else left. It scores 500 (the maximum) on every start state, so it is optimal fo
 from __future__ import annotations
 
 import argparse
+import math
 import csv
 import json
 import shutil
@@ -130,6 +131,7 @@ class EnvSpec:
         # CartPole-like: success = still balancing at the time limit, longer is better.
         # MountainCar: success = reaching the flag (the episode TERMINATES), shorter is better.
         self.success_is_terminal = key == "mountaincar"
+        self.n_actions = 3 if key == "mountaincar" else 2
         self.quality_steps = 200 if key == "mountaincar" else 10_000  # default length of the final test
         if key == "cartpole":
             self.env_id, self.title, self.folder = "CartPole-v1", "CartPole", "cli"
@@ -581,9 +583,9 @@ def _draw(fig, axes, rows: list[dict], live: bool) -> None:
             ("batch: mean episode length", [r["ret"] for r in rows], it),
             ("eval: most likely action, 10 fixed starts", [r["eval"] for r in rows if r["eval"] is not None], ev_it)], False),
         (axes[0, 1], "2. Is the actor learning?  (does not grow with episode length)", [
-            ("P(good action): 0.5 coin flip → 1 perfect", [r["p_good"] for r in rows], it),
+            (f"P(good action): {1 / SPEC.n_actions:.2f} = random → 1 perfect", [r["p_good"] for r in rows], it),
             ("most likely action = good action", [r["agree"] for r in rows], it),
-            ("entropy (0.69 = coin flip, 0 = always same)", [r["H"] for r in rows], it)], False),
+            (f"entropy ({math.log(SPEC.n_actions):.2f} = random, 0 = always the same)", [r["H"] for r in rows], it)], False),
         (axes[1, 0], "3. Critic loss ½(G−V)²  (grows with the returns)", [
             ("critic loss on the new batch", [r["Lv"] for r in rows], it)], True),
         (axes[1, 1], "4. Is the critic learning?  error as a fraction of the value", [
