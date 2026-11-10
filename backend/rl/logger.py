@@ -29,7 +29,7 @@ def runs_dir() -> Path:
     """Where runs live: $RL_RUNS_DIR if set (tests use a temp dir), else <project>/runs."""
     return Path(os.environ.get("RL_RUNS_DIR", DEFAULT_RUNS_DIR))
 
-ENV_SHORT = {"MountainCar-v0": "mc", "CartPole-v1": "cp", "DoubleCartPole-v0": "dcp", "DoubleCartPoleJoint-v0": "dcpj"}
+ENV_SHORT = {"MountainCar-v0": "mc", "CartPole-v1": "cp", "DoubleCartPole-v0": "dcp", "DoubleCartPoleJoint-v0": "dcpj", "LunarLander-v3": "ll"}
 _STEP_PREFIX = re.compile(rb'^\{"type":"step","ep":(\d+),')
 
 

@@ -74,6 +74,18 @@ ENV_INFO: dict[str, EnvInfo] = {
         phase_base=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
         official_max_steps=500,
     ),
+    "LunarLander-v3": EnvInfo(
+        # x is ±1 at the edges (out of bounds), y = 0 at the landing pad; velocities and angles: what random
+        # pushes reach (99th percentile ≈ 1.7, 1.6, 1.9 rad, 3.4 rad/s); the legs are 0 or 1.
+        obs_low=np.array([-1.0, -0.2, -2.0, -2.0, -2.0, -4.0, 0.0, 0.0]),
+        obs_high=np.array([1.0, 1.6, 2.0, 2.0, 2.0, 4.0, 1.0, 1.0]),
+        obs_names=("x", "y", "x velocity", "y velocity", "angle", "angular velocity", "left leg down", "right leg down"),
+        action_names=("nothing", "left engine", "main engine", "right engine"),
+        phase_dims=(0, 1),
+        phase_ranges=((-1.0, 1.0), (-0.2, 1.6)),
+        phase_base=(0.0,) * 8,
+        official_max_steps=1000,
+    ),
     "DoubleCartPoleJoint-v0": EnvInfo(
         # The same system with the joint rule: angles scaled by their limits (lower ±30°, bend ±20°).
         obs_low=np.array([-2.4, -3.0, -DCPJ_LOWER, -3.5, -DCPJ_BEND, -5.0]),
