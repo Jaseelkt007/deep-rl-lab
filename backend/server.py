@@ -407,7 +407,7 @@ def _num(v: str):
 
 CLI_ENVS = {"cartpole": "cli", "double_cartpole": "double_cartpole",  # ?env=... -> folder in runs/
             "double_cartpole_joint": "double_cartpole_joint", "mountaincar": "mountaincar",
-            "mountaincar_energy": "mountaincar_energy"}
+            "mountaincar_energy": "mountaincar_energy", "lunarlander": "lunarlander"}
 
 
 def _cli_root(env: str):
@@ -441,7 +441,9 @@ def _inner_summary(rows: list[dict], per_epoch: list[dict], env: str = "cartpole
     """Inside one batch, averaged: after each epoch, how far the policy is from π_old. Only the
     iterations where the batch was still learning (cart-poles: mean length < 475; MountainCar: not every
     episode reached the flag); after that A ≈ 0 and nothing moves."""
-    if env.startswith("mountaincar"):
+    if env == "lunarlander":  # judged by the score: still learning while the batch averages below 200
+        learning = {r["iter"] for r in rows if not (isinstance(r.get("score"), float) and r["score"] >= 200)}
+    elif env.startswith("mountaincar"):
         learning = {r["iter"] for r in rows if not (isinstance(r.get("success"), float) and r["success"] >= 0.95)}
     else:
         learning = {r["iter"] for r in rows if isinstance(r.get("ret"), float) and r["ret"] < 475}
