@@ -311,7 +311,7 @@ export default function EnvView({
           const chosen = step?.a === i;
           return (
             <div key={name} className="flex items-center gap-2 text-[11px]">
-              <span className="w-12 text-neutral-600">
+              <span className="shrink-0 whitespace-nowrap text-neutral-600" style={{ minWidth: 48 }}>
                 {ACTION_GLYPH[name]} {name}
               </span>
               <div className="relative h-3 flex-1 rounded-sm bg-neutral-100">
