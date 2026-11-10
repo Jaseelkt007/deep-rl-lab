@@ -124,6 +124,18 @@ uv run python scripts/train_cartpole.py --env mountaincar --algo batch_ac      #
 ```
 Runs: `runs/mountaincar/<algo>/`; page: **http://localhost:3000/mountaincar**.
 
+## LunarLander
+
+`LunarLander-v3` (Gymnasium, Box2D): land between the two flags. State: 8 numbers (x, y, both velocities, angle, angular velocity, two leg contacts). Actions: nothing, left engine, main engine, right engine. The reward is shaped (closer, slower and level is better; each leg touching +10; engines cost fuel; +100 for landing, −100 for crashing), episodes end on landing, crashing, flying out of the field or after 1,000 steps. **Judged by the score: 200 = solved.**
+
+Random pushes score about −210; Gymnasium's hand-written heuristic scores 262 on average and is the good policy on the page. It is a harder task than the others, so its defaults are 1,000,000 environment steps and 64 hidden units (about 10 minutes per algorithm on a laptop CPU). The ground-truth critic check is skipped here: the Box2D state cannot be rebuilt from the 8 numbers.
+
+```bash
+cd backend
+uv run python scripts/train_cartpole.py --env lunarlander --algo ppo --render-every 20     # or batch_ac, epochs, ratio, clip, gae
+```
+Runs: `runs/lunarlander/<algo>/`; page: **http://localhost:3000/lunarlander**.
+
 ## Other scripts
 
 ```bash
@@ -155,7 +167,7 @@ backend/
   server.py             FastAPI: terminal runs (/api/cli/algos, /api/cli/run/{algo}), Learn page API, older run API
   scripts/              train_cartpole.py, play_cartpole.py, check_cartpole.py, experiments.py, run_batch.py
   tests/                pytest
-frontend/               Next.js: / (Run, CartPole), /double (Run, double cart-pole), /learn (one update, step by step), /compare
+frontend/               Next.js: / (Run, CartPole), /double, /double-joint, /mountaincar, /mountaincar-energy, /lunarlander, /learn (one update, step by step), /compare
 docs/experiments/       pre-registered experiments and their results
 runs/                   saved runs (git-ignored); runs/cli/<algo>/ = the latest terminal run of each algorithm
 ```
