@@ -406,7 +406,7 @@ def _num(v: str):
 
 
 CLI_ENVS = {"cartpole": "cli", "double_cartpole": "double_cartpole",  # ?env=... -> folder in runs/
-            "double_cartpole_joint": "double_cartpole_joint"}
+            "double_cartpole_joint": "double_cartpole_joint", "mountaincar": "mountaincar"}
 
 
 def _cli_root(env: str):

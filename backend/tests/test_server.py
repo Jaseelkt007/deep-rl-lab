@@ -135,3 +135,4 @@ def test_cli_endpoints_per_environment(client, tmp_path):
     assert client.get("/api/cli/run/clip").status_code == 404
     assert client.get("/api/cli/algos?env=nope").status_code == 404
     assert client.get("/api/cli/algos?env=double_cartpole_joint").json() == []
+    assert client.get("/api/cli/algos?env=mountaincar").json() == []

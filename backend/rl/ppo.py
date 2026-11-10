@@ -129,7 +129,7 @@ class PPOSession:
         cfg = self.cfg
         X, acts, logp_old, rews, ends, next_obs = [], [], [], [], [], []
         segments, seg = [], {"states": []}
-        finished_lengths = []
+        finished_lengths, finished_terminated = [], []
         n_done_episodes = 0
         while True:
             x = torch.as_tensor(self.encoder(self.obs, 0))
@@ -146,6 +146,7 @@ class PPOSession:
             end = "terminated" if term else "truncated" if trunc else None
             if end:
                 finished_lengths.append(self.ep_len)
+                finished_terminated.append(end == "terminated")
                 n_done_episodes += 1
                 self.ep_len = 0
                 self.obs, _ = self.env.reset()
@@ -161,6 +162,7 @@ class PPOSession:
                 seg = {"states": []}
             if full:
                 break
+        self._finished_terminated = finished_terminated
         return X, acts, logp_old, rews, ends, next_obs, segments, finished_lengths
 
     # ------------------------------------------------------------------ advantages
@@ -238,12 +240,13 @@ class PPOSession:
 
         self.k += 1
         if finished:
-            self.last_mean_return = float(np.mean(finished))  # CartPole: return = episode length
+            self.last_mean_return = float(np.mean(finished))  # the mean LENGTH of the finished episodes
         summary = {
             "k": self.k, "mean_return": self.last_mean_return, "episodes_finished": len(finished), "steps": n,
             "critic_loss": critic_loss0, "critic_loss_after": critic_loss1, "actor_loss": actor_loss0,
             "entropy": entropy, "ev": explained_variance(V.tolist(), target.tolist()),
             "mean_abs_adv": float(np.abs(A).mean()), "grad_steps": steps, "clip_frac": clip_frac,
+            "finished_lengths": finished, "finished_terminated": self._finished_terminated,
             "per_epoch": per_epoch,
         }
         return {
