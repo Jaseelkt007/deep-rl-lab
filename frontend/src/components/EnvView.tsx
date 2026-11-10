@@ -138,6 +138,59 @@ function drawCartPole(ctx: CanvasRenderingContext2D, W: number, H: number, step:
   }
 }
 
+/** Two sticks on a free hinge. state = (x, ẋ, θ1, θ̇1, φ, φ̇); the top stick's angle is θ1 + φ. */
+function drawDoubleCartPole(ctx: CanvasRenderingContext2D, W: number, H: number, step: StepRec | null, actionName: string | null) {
+  const m = 14;
+  const px = (x: number) => m + ((x + 2.4) / 4.8) * (W - 2 * m);
+  const ground = H - 22;
+  ctx.strokeStyle = C.axis;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(m, ground);
+  ctx.lineTo(W - m, ground);
+  ctx.stroke();
+  for (const lim of [-2.4, 2.4]) {
+    ctx.strokeStyle = C.neg;
+    ctx.beginPath();
+    ctx.moveTo(px(lim), ground - 6);
+    ctx.lineTo(px(lim), ground + 6);
+    ctx.stroke();
+  }
+  if (!step) return;
+  const [x, , t1, , phi] = step.s;
+  const t2 = t1 + phi;
+  const cx = px(x);
+  const cartW = 44;
+  const cartH = 16;
+  ctx.fillStyle = C.ink;
+  ctx.fillRect(cx - cartW / 2, ground - cartH, cartW, cartH);
+  const L = H * 0.31; // each stick: half the height of the single pole
+  const base = [cx, ground - cartH];
+  const joint = [base[0] + L * Math.sin(t1), base[1] - L * Math.cos(t1)];
+  const tip = [joint[0] + L * Math.sin(t2), joint[1] - L * Math.cos(t2)];
+  ctx.lineWidth = 6;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "#c08a50";
+  ctx.beginPath();
+  ctx.moveTo(base[0], base[1]);
+  ctx.lineTo(joint[0], joint[1]);
+  ctx.stroke();
+  ctx.strokeStyle = "#6250d6";
+  ctx.beginPath();
+  ctx.moveTo(joint[0], joint[1]);
+  ctx.lineTo(tip[0], tip[1]);
+  ctx.stroke();
+  ctx.lineCap = "butt";
+  ctx.fillStyle = C.ink2;
+  ctx.beginPath();
+  ctx.arc(joint[0], joint[1], 4, 0, Math.PI * 2);
+  ctx.fill();
+  if (actionName) {
+    const dir = actionName === "left" ? -1 : 1;
+    arrow(ctx, cx + dir * (cartW / 2 + 16), ground - cartH / 2, dir, ACTION_COLORS[actionName]);
+  }
+}
+
 export default function EnvView({
   envId,
   step,
@@ -164,6 +217,7 @@ export default function EnvView({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, H);
     if (envId === "MountainCar-v0") drawMountainCar(ctx, W, H, step, trail, actionName);
+    else if (envId === "DoubleCartPole-v0") drawDoubleCartPole(ctx, W, H, step, actionName);
     else drawCartPole(ctx, W, H, step, actionName);
   }, [envId, step, trail, actionName]);
 

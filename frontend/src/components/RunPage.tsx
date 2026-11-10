@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
 import { BACKEND } from "@/lib/api";
 import { ACTION_COLORS, C } from "@/lib/colors";
 import { fmt } from "@/lib/math";
-import type { StepRec } from "@/lib/types";
+import type { EnvId, StepRec } from "@/lib/types";
 import EnvView from "./EnvView";
 import NavBar from "./NavBar";
 import Panel from "./Panel";
@@ -124,6 +124,7 @@ interface Episode extends EpisodeInfo {
   states: number[][];
   actions: number[];
   probs: number[][];
+  good_actions?: number[]; // the good policy's action at every step
 }
 
 /** From our batch actor-critic to PPO, one switch at a time (backend/rl/ppo.py). */
@@ -175,25 +176,106 @@ const LADDER_BY = Object.fromEntries(LADDER.map((l) => [l.key, l])) as Record<Al
 const GOOD_COLOR = C.pos;
 
 /** Everything that differs between environments. MountainCar plugs in here next. */
-const ENVS = {
-  "CartPole-v1": {
-    ready: true,
-    command: (algo: string) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --algo ${algo}`,
+interface StateRow {
+  name: string;
+  unit: string;
+  range: string;
+  scale: number; // what the network input is divided by (≈ ±1)
+  deg?: boolean; // also show degrees
+  derived?: (s: number[]) => number; // computed from the state, not one of its numbers
+}
+interface Trace {
+  label: string;
+  f: (s: number[]) => number; // scaled so that ±1 = the episode ends
+  color: string;
+  dash?: number[];
+}
+export interface EnvCfg {
+  key: "cartpole" | "double_cartpole";
+  envId: EnvId;
+  title: string;
+  href: string;
+  command: (algo: string) => string;
+  actions: string[];
+  state: StateRow[];
+  reward: string;
+  ends: string;
+  goodPolicy: string;
+  goodAction: (s: number[]) => number; // only for episodes recorded before good_actions were saved
+  traces: Trace[];
+  traceNote: string;
+  endText: (s: number[], steps: number) => string;
+  status: (s: number[]) => string; // one line under the cart in the side-by-side replay
+  angleColumn: string; // the quality test's angle measure
+}
+const DEG = 180 / Math.PI;
+const D15 = 15 / DEG;
+export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
+  cartpole: {
+    key: "cartpole",
+    envId: "CartPole-v1",
+    title: "CartPole",
+    href: "/",
+    command: (algo) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --algo ${algo}`,
     actions: ["left", "right"],
     state: [
       { name: "cart position", unit: "m", range: "±2.4 (end)", scale: 2.4 },
       { name: "cart velocity", unit: "m/s", range: "÷3.0", scale: 3.0 },
-      { name: "pole angle", unit: "rad", range: "±0.21 = ±12° (end)", scale: 0.2095 },
+      { name: "pole angle", unit: "rad", range: "±0.21 = ±12° (end)", scale: 0.2095, deg: true },
       { name: "pole angular velocity", unit: "rad/s", range: "÷3.5", scale: 3.5 },
     ],
     reward: "+1 per step alive",
     ends: "terminated: pole > 12° or cart off track · truncated: 500 steps",
     goodPolicy: "angle + 0.5·angular velocity > 0 → right",
+    goodAction: (s) => (s[2] + 0.5 * s[3] > 0 ? 1 : 0),
+    traces: [
+      { label: "cart position", f: (s) => s[0] / 2.4, color: C.ink },
+      { label: "pole angle", f: (s) => s[2] / 0.2095, color: C.critic },
+    ],
+    traceNote: "cart position / 2.4 and pole angle / 12° (±1 = episode ends)",
+    endText: (s, n) => (Math.abs(s[0]) / 2.4 > Math.abs(s[2]) / 0.2095 ? `cart left the track after ${n} steps` : `pole fell after ${n} steps`),
+    status: (s) => `cart ${s[0].toFixed(2)} m · pole ${(s[2] * DEG).toFixed(1)}°`,
+    angleColumn: "mean |pole angle|",
   },
-  "MountainCar-v0": { ready: false },
-} as const;
-type EnvKey = keyof typeof ENVS;
-const CARTPOLE = ENVS["CartPole-v1"];
+  double_cartpole: {
+    key: "double_cartpole",
+    envId: "DoubleCartPole-v0",
+    title: "Double CartPole",
+    href: "/double",
+    command: (algo) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --env double_cartpole --algo ${algo}`,
+    actions: ["left", "right"],
+    state: [
+      { name: "cart position", unit: "m", range: "±2.4 (end)", scale: 2.4 },
+      { name: "cart velocity", unit: "m/s", range: "÷3.0", scale: 3.0 },
+      { name: "lower stick angle θ1", unit: "rad", range: "±0.26 = ±15° (end)", scale: D15, deg: true },
+      { name: "lower stick ang. velocity", unit: "rad/s", range: "÷3.5", scale: 3.5 },
+      { name: "angle between sticks φ", unit: "rad", range: "÷0.52 = 30°", scale: 2 * D15, deg: true },
+      { name: "angle between sticks, rate", unit: "rad/s", range: "÷5.0", scale: 5.0 },
+      { name: "top stick angle θ1 + φ", unit: "rad", range: "±0.26 = ±15° (end)", scale: D15, deg: true, derived: (s) => s[2] + s[4] },
+    ],
+    reward: "+1 per step alive",
+    ends: "terminated: either stick > 15° from vertical or cart off track · truncated: 500 steps",
+    goodPolicy: "the LQR controller (textbook linear control) on ±10 N",
+    goodAction: () => 0,
+    traces: [
+      { label: "cart position", f: (s) => s[0] / 2.4, color: C.ink },
+      { label: "lower stick", f: (s) => s[2] / D15, color: "#c08a50" },
+      { label: "top stick", f: (s) => (s[2] + s[4]) / D15, color: "#6250d6" },
+    ],
+    traceNote: "cart position / 2.4 and each stick's angle from vertical / 15° (±1 = episode ends)",
+    endText: (s, n) => {
+      const r = [Math.abs(s[0]) / 2.4, Math.abs(s[2]) / D15, Math.abs(s[2] + s[4]) / D15];
+      const k = r.indexOf(Math.max(...r));
+      return [`cart left the track`, `lower stick fell`, `top stick fell`][k] + ` after ${n} steps`;
+    },
+    status: (s) => `cart ${s[0].toFixed(2)} m · lower ${(s[2] * DEG).toFixed(1)}° · top ${((s[2] + s[4]) * DEG).toFixed(1)}°`,
+    angleColumn: "mean |stick angle|",
+  },
+};
+const EnvCtx = createContext<EnvCfg>(ENVS.cartpole);
+const useEnv = () => useContext(EnvCtx);
+/** ?env=… for every API call on the double cart-pole page; CartPole keeps the default. */
+const q = (env: EnvCfg) => (env.key === "cartpole" ? "" : `?env=${env.key}`);
 
 // ------------------------------------------------------------------ helpers
 const num = (v: number | null | undefined) => (v == null ? "never" : Math.round(v).toLocaleString());
@@ -277,6 +359,7 @@ function Chart({ title, help, rows, series, log, range }: {
 const B = ({ on, children }: { on: boolean; children: ReactNode }) => (on ? <b className="font-semibold text-neutral-950">{children}</b> : <>{children}</>);
 
 function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected: AlgoKey; onSelect: (a: AlgoKey) => void }) {
+  const env = useEnv();
   const [speedY, setSpeedY] = useState<"ret" | "eval">("ret");
   const { have, by } = useMemo(
     () => ({
@@ -402,7 +485,7 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
                 <th className={head}>survives {maxSteps.toLocaleString()} steps</th>
                 <th className={head}>median survival</th>
                 <th className={head}>mean |cart position|</th>
-                <th className={head}>mean |pole angle|</th>
+                <th className={head}>{env.angleColumn}</th>
                 <th className={head}>action switches</th>
               </tr>
             </thead>
@@ -584,24 +667,29 @@ function Controls({ pb, children }: { pb: ReturnType<typeof usePlayback>; childr
 }
 
 function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
+  const env = useEnv();
   const n = ep.actions.length;
   const pb = usePlayback(n);
   const i = pb.i;
   const s = ep.states[i];
   const step = { s, a: ep.actions[i], p: ep.probs[i] } as unknown as StepRec;
-  const good = s[2] + 0.5 * s[3] > 0 ? 1 : 0;
+  const good = ep.good_actions?.[i] ?? env.goodAction(s);
   const trace = useMemo(
-    () => ({ x: ep.states.map((_, k) => k + 1), ys: [ep.states.map((st) => st[0] / 2.4), ep.states.map((st) => st[2] / 0.2095)] }),
-    [ep],
+    () => ({
+      x: ep.states.map((_, k) => k + 1),
+      ys: env.traces.map((t) => ep.states.map((st) => t.f(st))),
+      series: env.traces.map((t) => ({ label: t.label, color: t.color, width: 1.5, dash: t.dash })),
+    }),
+    [ep, env],
   );
   const markers: Marker[] = [{ x: i + 1, label: "", color: C.ink2 }];
-  const actions = CARTPOLE.actions as readonly string[];
+  const actions = env.actions;
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
       <div>
-        <EnvView envId="CartPole-v1" step={step} trail={[]} actionNames={[...actions]} />
+        <EnvView envId={env.envId} step={step} trail={[]} actionNames={actions} />
         <Controls pb={pb}>
-          <a className="text-[#2a78d6] hover:underline" href={`${BACKEND}/api/cli/run/${algo}/gif/${ep.name}`} target="_blank" rel="noreferrer">
+          <a className="text-[#2a78d6] hover:underline" href={`${BACKEND}/api/cli/run/${algo}/gif/${ep.name}${q(env)}`} target="_blank" rel="noreferrer">
             GIF
           </a>
         </Controls>
@@ -609,18 +697,21 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
       <div className="space-y-3">
         <table className="w-full text-[12px] tabular-nums">
           <tbody>
-            {CARTPOLE.state.map((d, k) => (
-              <tr key={d.name} className="border-b border-neutral-100">
-                <td className="py-0.5 text-neutral-500">{d.name}</td>
-                <td className="py-0.5 text-right text-neutral-900">
-                  {fmt(s[k], 3)} {d.unit}
-                  {k === 2 ? ` (${((s[k] * 180) / Math.PI).toFixed(1)}°)` : ""}
-                </td>
-                <td className="py-0.5 text-right text-neutral-400" title="network input (scaled)">
-                  {(s[k] / d.scale).toFixed(2)}
-                </td>
-              </tr>
-            ))}
+            {env.state.map((d, k) => {
+              const v = d.derived ? d.derived(s) : s[k];
+              return (
+                <tr key={d.name} className={`border-b border-neutral-100 ${d.derived ? "text-neutral-400" : ""}`}>
+                  <td className={`py-0.5 ${d.derived ? "" : "text-neutral-500"}`}>{d.name}</td>
+                  <td className={`py-0.5 text-right ${d.derived ? "" : "text-neutral-900"}`}>
+                    {fmt(v, 3)} {d.unit}
+                    {d.deg ? ` (${(v * DEG).toFixed(1)}°)` : ""}
+                  </td>
+                  <td className="py-0.5 text-right text-neutral-400" title={d.derived ? "not a network input" : "network input (scaled)"}>
+                    {d.derived ? "" : (v / d.scale).toFixed(2)}
+                  </td>
+                </tr>
+              );
+            })}
             <tr>
               <td className="py-0.5 text-neutral-500">{ep.name === "good" ? "good policy" : "agent"} pushes</td>
               <td className="py-0.5 text-right" style={{ color: ACTION_COLORS[actions[ep.actions[i]]] }}>
@@ -640,19 +731,8 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
           </tbody>
         </table>
         <div>
-          <div className="text-[11px] text-neutral-500">cart position / 2.4 and pole angle / 12° (±1 = episode ends)</div>
-          <UChart
-            x={trace.x}
-            ys={trace.ys}
-            height={120}
-            yRange={[-1, 1]}
-            markers={markers}
-            xLabel="step"
-            series={[
-              { label: "cart position", color: C.ink, width: 1.5 },
-              { label: "pole angle", color: C.critic, width: 1.5 },
-            ]}
-          />
+          <div className="text-[11px] text-neutral-500">{env.traceNote}</div>
+          <UChart x={trace.x} ys={trace.ys} height={120} yRange={[-1, 1]} markers={markers} xLabel="step" series={trace.series} />
         </div>
       </div>
     </div>
@@ -660,6 +740,7 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
 }
 
 function Episodes({ data }: { data: RunData }) {
+  const env = useEnv();
   const learned = data.episodes.filter((e) => e.name !== "good");
   const good = data.episodes.find((e) => e.name === "good");
   const finalIter = data.status.state !== "running" ? learned.at(-1)?.iter : undefined;
@@ -669,14 +750,14 @@ function Episodes({ data }: { data: RunData }) {
   useEffect(() => {
     if (!current) return;
     let alive = true;
-    fetch(`${BACKEND}/api/cli/run/${data.algo}/episode/${current}`)
+    fetch(`${BACKEND}/api/cli/run/${data.algo}/episode/${current}${q(env)}`)
       .then((r) => r.json())
       .then((e: Episode) => alive && setEp(e))
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [current, data.algo]);
+  }, [current, data.algo, env]);
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-1.5">
@@ -711,10 +792,9 @@ function Episodes({ data }: { data: RunData }) {
 type Side = AlgoKey | "good";
 type IterPick = "final" | number;
 
-function endText(ep: Episode) {
+function endText(ep: Episode, env: EnvCfg) {
   if (!ep.terminated) return `${ep.steps} steps: time limit reached, still balancing`;
-  const s = ep.states.at(-1)!;
-  return Math.abs(s[0]) / 2.4 > Math.abs(s[2]) / 0.2095 ? `cart left the track after ${ep.steps} steps` : `pole fell after ${ep.steps} steps`;
+  return env.endText(ep.states.at(-1)!, ep.steps);
 }
 
 interface SideView {
@@ -726,23 +806,30 @@ interface SideView {
 
 /** Two recorded episodes played together, one shared play / pause / slider. */
 function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
+  const env = useEnv();
   const n = Math.max(a.ep.actions.length, b.ep.actions.length);
   const pb = usePlayback(n);
-  const actions = [...CARTPOLE.actions];
+  const actions = env.actions;
+  const { ep: epA, label: labelA, color: colorA } = a;
+  const { ep: epB, label: labelB, color: colorB } = b;
   const trace = useMemo(() => {
     const x = Array.from({ length: n }, (_, k) => k + 1);
-    const col = (ep: Episode, j: number, scale: number) => x.map((_, k) => (k < ep.states.length ? ep.states[k][j] / scale : null));
-    return {
-      x,
-      ys: [col(a.ep, 2, 0.2095), col(b.ep, 2, 0.2095), col(a.ep, 0, 2.4), col(b.ep, 0, 2.4)],
-      series: [
-        { label: `${a.label}: pole angle`, color: a.color, width: 1.75 },
-        { label: `${b.label}: pole angle`, color: b.color, width: 1.75 },
-        { label: `${a.label}: cart position`, color: a.color, width: 1.25, dash: [5, 3] },
-        { label: `${b.label}: cart position`, color: b.color, width: 1.25, dash: [5, 3] },
-      ],
-    };
-  }, [a.ep, b.ep, a.label, b.label, a.color, b.color, n]);
+    // per side: the cart dashed, the first angle solid, a second angle dotted
+    const dashes: (number[] | undefined)[] = [[5, 3], undefined, [1.5, 2.5]];
+    const sides = [
+      { ep: epA, label: labelA, color: colorA },
+      { ep: epB, label: labelB, color: colorB },
+    ];
+    const ys: (number | null)[][] = [];
+    const series: SeriesSpec[] = [];
+    env.traces.forEach((t, ti) =>
+      sides.forEach((sd) => {
+        ys.push(x.map((_, k) => (k < sd.ep.states.length ? t.f(sd.ep.states[k]) : null)));
+        series.push({ label: `${sd.label}: ${t.label}`, color: sd.color, width: ti === 0 ? 1.25 : 1.75, dash: dashes[ti] });
+      }),
+    );
+    return { x, ys, series };
+  }, [epA, epB, labelA, labelB, colorA, colorB, n, env]);
   return (
     <div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -760,13 +847,13 @@ function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
                 <span className="text-[11.5px] text-neutral-500">{sd.sub}</span>
               </div>
               <div className="relative">
-                <EnvView envId="CartPole-v1" step={step} trail={[]} actionNames={actions} />
+                <EnvView envId={env.envId} step={step} trail={[]} actionNames={actions} />
                 {ended && (
-                  <div className="absolute left-1/2 top-2 -translate-x-1/2 rounded bg-[#e34948] px-2 py-0.5 text-[11.5px] font-medium text-white">{endText(sd.ep)}</div>
+                  <div className="absolute left-1/2 top-2 -translate-x-1/2 rounded bg-[#e34948] px-2 py-0.5 text-[11.5px] font-medium text-white">{endText(sd.ep, env)}</div>
                 )}
               </div>
               <div className="mt-1 text-[11.5px] tabular-nums text-neutral-600">
-                step {j + 1}/{len} · cart {s[0].toFixed(2)} m · pole {((s[2] * 180) / Math.PI).toFixed(1)}°{" "}
+                step {j + 1}/{len} · {env.status(s)}{" "}
                 {!sd.ep.terminated && pb.i >= len - 1 && <span className="text-[#0b7a52]">· reached 500</span>}
               </div>
             </div>
@@ -774,13 +861,14 @@ function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
         })}
       </div>
       <Controls pb={pb} />
-      <div className="mt-2 text-[11px] text-neutral-500">pole angle / 12° (solid) and cart position / 2.4 m (dashed): ±1 = the episode ends</div>
+      <div className="mt-2 text-[11px] text-neutral-500">{env.traceNote}; cart position dashed</div>
       <UChart x={trace.x} ys={trace.ys} series={trace.series} height={140} yRange={[-1, 1]} markers={[{ x: pb.i + 1, label: "", color: C.ink2 }]} xLabel="step" />
     </div>
   );
 }
 
 function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoKey }) {
+  const env = useEnv();
   const have = LADDER.filter((l) => algos.some((a) => a.algo === l.key)).map((l) => l.key);
   const by = Object.fromEntries(algos.map((a) => [a.algo, a])) as Partial<Record<AlgoKey, AlgoSummary>>;
   const [leftPick, setLeft] = useState<Side | null>(null);
@@ -807,7 +895,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
       [srcR, verR],
     ] as const) {
       if (!k || lists[v]) continue;
-      fetch(`${BACKEND}/api/cli/run/${k}/episodes`)
+      fetch(`${BACKEND}/api/cli/run/${k}/episodes${q(env)}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d: EpisodeInfo[] | null) => alive && d && setLists((prev) => ({ ...prev, [v]: d })))
         .catch(() => {});
@@ -815,7 +903,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
     return () => {
       alive = false;
     };
-  }, [srcL, srcR, verL, verR, lists]);
+  }, [srcL, srcR, verL, verR, lists, env]);
 
   const learned = (s: Side) => (s === "good" ? [] : (lists[ver(s)] ?? []).filter((e) => e.name !== "good"));
   const resolve = (s: Side): EpisodeInfo | null | undefined => {
@@ -838,7 +926,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
       [keyR, srcR, infoR],
     ] as const) {
       if (!k || !src || !info || eps[k]) continue;
-      fetch(`${BACKEND}/api/cli/run/${src}/episode/${info.name}`)
+      fetch(`${BACKEND}/api/cli/run/${src}/episode/${info.name}${q(env)}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((e: Episode | null) => alive && e && setEps((prev) => ({ ...prev, [k]: e })))
         .catch(() => {});
@@ -846,7 +934,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
     return () => {
       alive = false;
     };
-  }, [keyL, keyR, srcL, srcR, infoL, infoR, eps]);
+  }, [keyL, keyR, srcL, srcR, infoL, infoR, eps, env]);
 
   // iterations recorded in either run (a run's own last iteration is under "final")
   const sets = [left, right].filter((s) => s !== "good").map((s) => learned(s).map((e) => e.iter));
@@ -856,7 +944,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
     .filter((it) => sets.every((s) => s.includes(it)) || !finals.includes(it));
 
   const view = (s: Side, info: EpisodeInfo, ep: Episode): SideView => {
-    if (s === "good") return { label: "good policy", sub: `hand-written: ${CARTPOLE.goodPolicy}`, color: GOOD_COLOR, ep };
+    if (s === "good") return { label: "good policy", sub: `hand-written: ${env.goodPolicy}`, color: GOOD_COLOR, ep };
     const steps = by[s]?.speed.find((p) => p.iter === info.iter)?.env_steps;
     const isFinal = learned(s).at(-1)?.name === info.name && !isLive(by[s]?.status);
     return {
@@ -919,6 +1007,8 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
 
 // ------------------------------------------------------------------ the selected algorithm
 function UpdatePanel({ c }: { c: AlgoConfig }) {
+  const env = useEnv();
+  const nIn = env.state.filter((d) => !d.derived).length;
   const lam = c.gae_lambda ?? 1;
   const u = updates(c);
   return (
@@ -993,7 +1083,7 @@ function UpdatePanel({ c }: { c: AlgoConfig }) {
         {u.n != null && u.n > 1 && <span className="text-neutral-500"> = {u.n} gradient steps</span>} (critic and actor each)
       </Kv>
       <Kv k="networks">
-        actor 4→{c.hidden}→2 · critic 4→{c.hidden}→1 · {c.optimizer ?? "adam"} · lr {c.actor_lr} / {c.critic_lr}
+        actor {nIn}→{c.hidden}→{env.actions.length} · critic {nIn}→{c.hidden}→1 · {c.optimizer ?? "adam"} · lr {c.actor_lr} / {c.critic_lr}
       </Kv>
       <div className="pt-1.5 text-right">
         <Link href="/learn" className="text-[12px] text-[#2a78d6] hover:underline">
@@ -1152,6 +1242,7 @@ function InsideIteration({ data }: { data: RunData }) {
 }
 
 function AlgoDetail({ data }: { data: RunData }) {
+  const env = useEnv();
   const rows = data.rows;
   return (
     <>
@@ -1165,7 +1256,9 @@ function AlgoDetail({ data }: { data: RunData }) {
         <div className="space-y-3">
           <UpdatePanel c={data.settings.config} />
           <Panel title="Environment" help="What the agent observes and does. The state is fully observed; each number is divided by its range before going into the networks.">
-            {CARTPOLE.state.map((d) => (
+            {env.state
+              .filter((d) => !d.derived)
+              .map((d) => (
               <Kv key={d.name} k={d.name.replace("pole angular velocity", "ang. velocity")}>
                 {d.unit} <span className="text-neutral-400">{d.range}</span>
               </Kv>
@@ -1173,8 +1266,8 @@ function AlgoDetail({ data }: { data: RunData }) {
             <Kv k="actions">
               <span style={{ color: ACTION_COLORS.left }}>← left</span> · <span style={{ color: ACTION_COLORS.right }}>→ right</span>
             </Kv>
-            <Kv k="reward">{CARTPOLE.reward}</Kv>
-            <Kv k="ends">{CARTPOLE.ends}</Kv>
+            <Kv k="reward">{env.reward}</Kv>
+            <Kv k="ends">{env.ends}</Kv>
           </Panel>
         </div>
       </div>
@@ -1192,7 +1285,7 @@ function AlgoDetail({ data }: { data: RunData }) {
           />
           <Chart
             title="Actor: is the policy right?"
-            help={`P(good action): probability given to the good policy's action (${CARTPOLE.goodPolicy}); 0.5 = coin flip, 1 = perfect. Agreement: how often the most likely action is the good one. Entropy: 0.69 = coin flip, 0 = always the same action.`}
+            help={`P(good action): probability given to the good policy's action (${env.goodPolicy}); 0.5 = coin flip, 1 = perfect. Agreement: how often the most likely action is the good one. Entropy: 0.69 = coin flip, 0 = always the same action.`}
             rows={rows}
             series={[
               { key: "p_good", label: "P(good)", color: C.actor },
@@ -1256,8 +1349,8 @@ function AlgoDetail({ data }: { data: RunData }) {
 // ------------------------------------------------------------------ page
 const isLive = (s?: Status) => s?.state === "running" || s?.state === "testing";
 
-export default function RunPage() {
-  const [envKey, setEnvKey] = useState<EnvKey>("CartPole-v1");
+export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"] }) {
+  const env = ENVS[envKey];
   const [algos, setAlgos] = useState<AlgoSummary[] | null>(null);
   const [run, setRun] = useState<RunData | null>(null);
   const [picked, setPicked] = useState<AlgoKey | null>(null);
@@ -1270,7 +1363,7 @@ export default function RunPage() {
     let timer = 0;
     const load = async () => {
       try {
-        const res = await fetch(`${BACKEND}/api/cli/algos`);
+        const res = await fetch(`${BACKEND}/api/cli/algos${q(env)}`);
         if (!res.ok) throw new Error(res.statusText);
         const d: AlgoSummary[] = await res.json();
         if (!alive) return;
@@ -1286,7 +1379,7 @@ export default function RunPage() {
       alive = false;
       window.clearTimeout(timer);
     };
-  }, []);
+  }, [env]);
 
   // default: the algorithm training right now, else the highest rung of the ladder that has a run
   const fallback = algos?.find((a) => isLive(a.status))?.algo ?? [...LADDER].reverse().find((l) => algos?.some((a) => a.algo === l.key))?.key ?? null;
@@ -1298,42 +1391,43 @@ export default function RunPage() {
   useEffect(() => {
     if (!version) return;
     let alive = true;
-    fetch(`${BACKEND}/api/cli/run/${algo}`)
+    fetch(`${BACKEND}/api/cli/run/${algo}${q(env)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d: RunData | null) => alive && d && setRun(d))
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [algo, version]);
+  }, [algo, version, env]);
 
   const data = run?.algo === algo ? run : null;
   const st: Status = data?.status ?? summary?.status ?? {};
   const cfg = data?.settings.config ?? summary?.settings.config;
   const L = LADDER_BY[algo];
-  const commandOne = CARTPOLE.command(algo);
-  const commandAll = `${CARTPOLE.command("all")} --render-every 0`;
+  const commandOne = env.command(algo);
+  const commandAll = `${env.command("all")} --render-every 0`;
   const copy = (text: string, key: string) => navigator.clipboard?.writeText(text).then(() => setCopied(key)).catch(() => {});
   const progress = st.budget && st.env_steps != null ? Math.min(1, st.env_steps / st.budget) : null;
 
   return (
+    <EnvCtx.Provider value={env}>
     <div className="min-h-screen bg-[#fafaf9]">
       <NavBar
         active="run"
         right={
           <div className="flex items-center gap-1 rounded-md bg-neutral-100 p-0.5 text-[12px]">
-            {(Object.keys(ENVS) as EnvKey[]).map((k) => (
-              <button
-                key={k}
-                disabled={!ENVS[k].ready}
-                onClick={() => setEnvKey(k)}
-                title={ENVS[k].ready ? "" : "next"}
-                className={`rounded px-2.5 py-1 ${envKey === k ? "bg-white font-medium text-neutral-900 shadow-sm" : "text-neutral-400"} disabled:cursor-not-allowed`}
+            {Object.values(ENVS).map((e) => (
+              <Link
+                key={e.key}
+                href={e.href}
+                className={`rounded px-2.5 py-1 ${e.key === env.key ? "bg-white font-medium text-neutral-900 shadow-sm" : "text-neutral-500 hover:text-neutral-900"}`}
               >
-                {k}
-                {!ENVS[k].ready && <span className="ml-1 text-[10px]">(next)</span>}
-              </button>
+                {e.title}
+              </Link>
             ))}
+            <span className="cursor-not-allowed rounded px-2.5 py-1 text-neutral-400" title="next">
+              MountainCar <span className="text-[10px]">(next)</span>
+            </span>
           </div>
         }
       />
@@ -1341,14 +1435,14 @@ export default function RunPage() {
         {/* the ladder */}
         <div className="rounded-lg border border-neutral-200 bg-white px-4 py-3">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-[18px] font-semibold text-neutral-900">From Batch Actor-Critic to PPO</h1>
-            <span className="text-[13px] text-neutral-500">one change at a time · same 200,000 environment steps each · {envKey}</span>
+            <h1 className="text-[18px] font-semibold text-neutral-900">{env.title}: from Batch Actor-Critic to PPO</h1>
+            <span className="text-[13px] text-neutral-500">one change at a time · the same budget of environment steps for each · {env.envId}</span>
             <button
               className="ml-auto rounded border border-neutral-300 px-2 py-0.5 font-mono text-[11px] hover:bg-neutral-50"
               title={commandAll}
               onClick={() => copy(commandAll, "all")}
             >
-              {copied === "all" ? "copied ✓" : "copy command: train all 5"}
+              {copied === "all" ? "copied ✓" : `copy command: train all ${LADDER.length}`}
             </button>
           </div>
           <div className="mt-3 flex flex-wrap items-stretch gap-1.5">
@@ -1444,5 +1538,6 @@ export default function RunPage() {
         )}
       </main>
     </div>
+    </EnvCtx.Provider>
   );
 }

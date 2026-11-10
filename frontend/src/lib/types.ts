@@ -1,6 +1,6 @@
 // Shapes of the records the backend emits (see backend/rl/trainer.py).
 
-export type EnvId = "MountainCar-v0" | "CartPole-v1";
+export type EnvId = "MountainCar-v0" | "CartPole-v1" | "DoubleCartPole-v0";
 
 export interface RunConfig {
   env_id: EnvId;
