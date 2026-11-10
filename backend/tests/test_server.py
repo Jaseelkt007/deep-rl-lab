@@ -103,13 +103,19 @@ def test_cli_endpoints(client, tmp_path):
     (d.parent / "settings.json").write_text(_json.dumps({"algo": "ppo", "config": {"epochs": 10}}))
     (d.parent / "status.json").write_text(_json.dumps({"state": "finished", "iter": 2, "env_steps": 4096}))
     (d.parent / "log.csv").write_text("iter,ret,env_steps,eval\n1,15.4,2048,9.0\n2,12.6,4096,\n")
+    (d.parent / "per_epoch.csv").write_text("iter,epoch,kl,past,r_pos,r_neg,r_max,r_min\n"
+                                            "1,1,0.01,0.0,1.1,0.9,1.3,0.7\n1,2,0.03,0.2,1.3,0.8,1.6,0.5\n"
+                                            "2,1,0.02,0.1,1.2,0.9,1.4,0.6\n2,2,0.05,0.4,1.5,0.7,2.0,0.4\n")
     (d / "iter0001.json").write_text(_json.dumps({"name": "iter0001", "iter": 1, "steps": 3, "terminated": True,
                                                   "states": [[0, 0, 0, 0]] * 3, "actions": [0, 1, 0], "probs": [[0.5, 0.5]] * 3}))
     algos = client.get("/api/cli/algos").json()
     assert [a["algo"] for a in algos] == ["ppo"] and algos[0]["speed"][1] == {"iter": 2.0, "env_steps": 4096.0, "ret": 12.6, "eval": None,
                                                                          "KL": None, "clip_frac": None}
+    inner = algos[0]["inner"]  # averaged over iterations 1 and 2 (both still learning)
+    assert inner["epoch"] == [1.0, 2.0] and inner["kl"] == pytest.approx([0.015, 0.04]) and inner["n_iters"] == 2
     r = client.get("/api/cli/run/ppo").json()
     assert r["rows"][0]["env_steps"] == 2048.0 and r["episodes"][0]["steps"] == 3
+    assert len(r["per_epoch"]) == 4 and r["per_epoch"][3]["r_max"] == 2.0
     assert client.get("/api/cli/run/ppo/episode/iter0001").json()["actions"] == [0, 1, 0]
     assert client.get("/api/cli/run/ppo/episodes").json() == [{"name": "iter0001", "iter": 1, "steps": 3, "terminated": True}]
     assert client.get("/api/cli/run/ppo/episode/..%2Fsettings").status_code == 404

@@ -419,6 +419,31 @@ def _cli_rows(d) -> list[dict]:
         return [{k: _num(v) for k, v in r.items()} for r in _csv.DictReader(f)]
 
 
+def _cli_per_epoch(d) -> list[dict]:
+    if not (d / "per_epoch.csv").exists():
+        return []
+    with open(d / "per_epoch.csv", newline="") as f:
+        return [{k: _num(v) for k, v in r.items()} for r in _csv.DictReader(f)]
+
+
+def _inner_summary(rows: list[dict], per_epoch: list[dict]) -> dict | None:
+    """Inside one batch, averaged: after each epoch, how far the policy is from π_old. Only the
+    iterations where the batch was still learning (mean length < 475); after that A ≈ 0 and nothing moves."""
+    learning = {r["iter"] for r in rows if isinstance(r.get("ret"), float) and r["ret"] < 475}
+    sel = [e for e in per_epoch if e["iter"] in learning]
+    if not sel:
+        return None
+    keys = ("kl", "past", "r_pos", "r_neg", "r_hi", "r_lo")
+    out: dict = {"n_iters": len({e["iter"] for e in sel}), "epoch": [], **{k: [] for k in keys}}
+    for ep in sorted({e["epoch"] for e in sel}):
+        es = [e for e in sel if e["epoch"] == ep]
+        out["epoch"].append(ep)
+        for k in keys:
+            vals = [e[k] for e in es if isinstance(e.get(k), float)]
+            out[k].append(sum(vals) / len(vals) if vals else None)
+    return out
+
+
 def _cli_json(path):
     return json.loads(path.read_text()) if path.exists() else None
 
@@ -434,6 +459,7 @@ def cli_algos() -> list[dict]:
             "algo": d.name, "settings": json.loads(settings.read_text()), "status": _cli_json(d / "status.json") or {},
             "scorecard": _cli_json(d / "scorecard.json"),
             "speed": [{k: r.get(k) for k in ("iter", "env_steps", "ret", "eval", "KL", "clip_frac")} for r in rows],
+            "inner": _inner_summary(rows, _cli_per_epoch(d)),
         }))
     return out
 
@@ -451,7 +477,7 @@ def cli_run(algo: str) -> dict:
     d = _cli_dir(algo)
     return clean({"algo": algo, "settings": json.loads((d / "settings.json").read_text()),
                   "status": _cli_json(d / "status.json") or {}, "rows": _cli_rows(d), "episodes": _cli_episodes(d),
-                  "scorecard": _cli_json(d / "scorecard.json")})
+                  "per_epoch": _cli_per_epoch(d), "scorecard": _cli_json(d / "scorecard.json")})
 
 
 @app.get("/api/cli/run/{algo}/episodes")
