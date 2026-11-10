@@ -217,7 +217,7 @@ export default function EnvView({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, H);
     if (envId === "MountainCar-v0") drawMountainCar(ctx, W, H, step, trail, actionName);
-    else if (envId === "DoubleCartPole-v0") drawDoubleCartPole(ctx, W, H, step, actionName);
+    else if (envId === "DoubleCartPole-v0" || envId === "DoubleCartPoleJoint-v0") drawDoubleCartPole(ctx, W, H, step, actionName);
     else drawCartPole(ctx, W, H, step, actionName);
   }, [envId, step, trail, actionName]);
 

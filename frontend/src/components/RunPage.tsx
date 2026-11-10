@@ -191,9 +191,10 @@ interface Trace {
   dash?: number[];
 }
 export interface EnvCfg {
-  key: "cartpole" | "double_cartpole";
+  key: "cartpole" | "double_cartpole" | "double_cartpole_joint";
   envId: EnvId;
   title: string;
+  tab: string;
   href: string;
   command: (algo: string) => string;
   actions: string[];
@@ -210,11 +211,14 @@ export interface EnvCfg {
 }
 const DEG = 180 / Math.PI;
 const D15 = 15 / DEG;
+const D20 = 20 / DEG;
+const D30 = 30 / DEG;
 export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
   cartpole: {
     key: "cartpole",
     envId: "CartPole-v1",
     title: "CartPole",
+    tab: "CartPole",
     href: "/",
     command: (algo) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --algo ${algo}`,
     actions: ["left", "right"],
@@ -241,6 +245,7 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
     key: "double_cartpole",
     envId: "DoubleCartPole-v0",
     title: "Double CartPole",
+    tab: "Double CartPole",
     href: "/double",
     command: (algo) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --env double_cartpole --algo ${algo}`,
     actions: ["left", "right"],
@@ -269,6 +274,41 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
       return [`cart left the track`, `lower stick fell`, `top stick fell`][k] + ` after ${n} steps`;
     },
     status: (s) => `cart ${s[0].toFixed(2)} m · lower ${(s[2] * DEG).toFixed(1)}° · top ${((s[2] + s[4]) * DEG).toFixed(1)}°`,
+    angleColumn: "mean |stick angle|",
+  },
+  double_cartpole_joint: {
+    key: "double_cartpole_joint",
+    envId: "DoubleCartPoleJoint-v0",
+    title: "Double CartPole (joint rule)",
+    tab: "Double · joint rule",
+    href: "/double-joint",
+    command: (algo) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --env double_cartpole_joint --algo ${algo}`,
+    actions: ["left", "right"],
+    state: [
+      { name: "cart position", unit: "m", range: "±2.4 (end)", scale: 2.4 },
+      { name: "cart velocity", unit: "m/s", range: "÷3.0", scale: 3.0 },
+      { name: "lower stick angle θ1", unit: "rad", range: "±0.52 = ±30° (end)", scale: D30, deg: true },
+      { name: "lower stick ang. velocity", unit: "rad/s", range: "÷3.5", scale: 3.5 },
+      { name: "angle between sticks φ", unit: "rad", range: "±0.35 = ±20° (end)", scale: D20, deg: true },
+      { name: "angle between sticks, rate", unit: "rad/s", range: "÷5.0", scale: 5.0 },
+      { name: "top stick angle θ1 + φ", unit: "rad", range: "no limit of its own", scale: 1, deg: true, derived: (s) => s[2] + s[4] },
+    ],
+    reward: "+1 per step alive",
+    ends: "terminated: lower stick > 30° from vertical, top stick bent > 20° away from the lower stick, or cart off track · truncated: 500 steps",
+    goodPolicy: "the LQR controller (textbook linear control) on ±10 N",
+    goodAction: () => 0,
+    traces: [
+      { label: "cart position", f: (s) => s[0] / 2.4, color: C.ink },
+      { label: "lower stick", f: (s) => s[2] / D30, color: "#c08a50" },
+      { label: "bend between sticks", f: (s) => s[4] / D20, color: "#6250d6" },
+    ],
+    traceNote: "cart position / 2.4, lower stick / 30° and the bend between the sticks / 20° (±1 = episode ends)",
+    endText: (s, n) => {
+      const r = [Math.abs(s[0]) / 2.4, Math.abs(s[2]) / D30, Math.abs(s[4]) / D20];
+      const k = r.indexOf(Math.max(...r));
+      return [`cart left the track`, `lower stick fell`, `top stick bent too far`][k] + ` after ${n} steps`;
+    },
+    status: (s) => `cart ${s[0].toFixed(2)} m · lower ${(s[2] * DEG).toFixed(1)}° · bend ${(s[4] * DEG).toFixed(1)}°`,
     angleColumn: "mean |stick angle|",
   },
 };
@@ -1452,7 +1492,7 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
                 href={e.href}
                 className={`rounded px-2.5 py-1 ${e.key === env.key ? "bg-white font-medium text-neutral-900 shadow-sm" : "text-neutral-500 hover:text-neutral-900"}`}
               >
-                {e.title}
+                {e.tab}
               </Link>
             ))}
             <span className="cursor-not-allowed rounded px-2.5 py-1 text-neutral-400" title="next">
