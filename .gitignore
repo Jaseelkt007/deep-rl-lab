@@ -27,3 +27,6 @@ runs/*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Vercel CLI link (local only)
+.vercel

@@ -1,0 +1,5 @@
+# Only the website goes to Vercel (project Root Directory: frontend); never upload runs/ or the backend.
+/*
+!/frontend
+/frontend/node_modules
+/frontend/.next
