@@ -2,7 +2,9 @@
 
 A small playground for understanding how actor-critic learns, by watching it. It currently focuses on **CartPole-v1**: **batch actor-critic** (on-policy, Monte Carlo returns), then **PPO**, built from it one change at a time. MountainCar-v0 is next. You train in the terminal and watch the run in the web app.
 
-![Run page](docs/img/cartpole-page.png)
+![Side by side on MountainCar with an energy bonus: batch actor-critic never reaches the flag, PPO reaches it after 165 steps](docs/img/mountaincar-side-by-side.png)
+
+*Same start, two final policies: batch actor-critic (left) never reaches the flag; PPO (right) gets there in 165 steps.*
 
 ## Quick start
 
