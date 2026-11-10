@@ -12,7 +12,7 @@ You need Python ≥ 3.11 with [uv](https://docs.astral.sh/uv/), and Node ≥ 20 
 ```bash
 cd backend && uv sync
 uv run python scripts/train_cartpole.py --algo all --render-every 0   # all 5 algorithms, one after another
-uv run python scripts/train_cartpole.py --algo ppo                    # or one: batch_ac | epochs | clip | gae | ppo
+uv run python scripts/train_cartpole.py --algo ppo                    # or one: batch_ac | epochs | ratio | clip | gae | ppo
 ```
 - Every algorithm trains for the same 200,000 environment steps (`--budget`).
 - One log line per iteration in the terminal.
@@ -32,15 +32,18 @@ Useful options: `--budget 100000`, `--seed 1`, `--batch 10`, `--actor-lr 0.005`,
 ## The web app
 
 - **Run** (`/`): the latest terminal run of each algorithm.
-  - The ladder `Batch AC → + epochs → + clip → + GAE → PPO`, with the status of each, and a button that copies the train command.
+  - The steps `Batch AC → + epochs → + ratio → + clip → + GAE → PPO`, with the status of each, and a button that copies the train command.
   - **Compare the algorithms**, beyond the 500 cap, all against environment steps (iterations differ between algorithms):
     - a table: gradient steps per batch, **speed** (steps until the policy first scores 500), **stability** (does it stay there), **quality** (the final policy tested for up to 10,000 steps from 20 starts: survival, centering, calmness, action switching), next to the hand-written good policy;
     - episode length vs environment steps, one line per algorithm;
     - update size: how far each batch moves the policy (KL);
-    - survival curves of the final policies.
+    - survival curves of the final policies;
+    - inside one batch, epoch by epoch: KL from π_old, the ratio r of the steps pushed furthest, the share of steps past the clip limit.
+  - Side by side: two policies (or one and the good policy) playing the same start, at the same iteration.
   - The selected algorithm (click a step of the ladder or a table row):
     - recorded episodes: the policy every 10 iterations, the final one, and the good policy, replayed with the state values;
     - its update rule (batch, advantage, critic and actor loss, gradient steps) and the environment;
+    - inside one iteration (pick any): r, KL and the share past the clip limit after each of its epochs;
     - six charts: episode length; P(good action), agreement, entropy; KL and the share of steps moved > 20 %; the raw critic loss; the critic's scale-free error against the true value; corr(V, target) and explained variance;
     - the log.
 - **Learn** (`/learn`): one update, step by step: collect, critic, returns, advantage, the critic step and the actor step weight by weight.
@@ -69,12 +72,15 @@ The code is `backend/rl/explain.py`. The training script is `backend/scripts/tra
 | `--algo` | adds | gradient steps per batch |
 |---|---|---|
 | `batch_ac` | the start: 5 episodes, 1 gradient step, throw away | 1 |
-| `epochs` | use every batch 10 times (10 epochs), nothing else | 10 |
-| `clip` | ratio r = π(a\|s)/π_old(a\|s); loss −min(r·A, clip(r, 0.8, 1.2)·A) | 10 |
+| `epochs` | use every batch 10 times (10 epochs) with the same loss −A·log π, as if the current policy had played the batch | 10 |
+| `ratio` | importance ratio r = π(a\|s)/π_old(a\|s), loss −r·A: corrects for the batch coming from π_old (r = 1 in epoch 1), no limit | 10 |
+| `clip` | the brake: loss −min(r·A, clip(r, 0.8, 1.2)·A); a step past the limit stops pushing | 10 |
 | `gae` | advantage from the critic's one-step errors: δ = r + γV(s′) − V(s), A = Σ (γλ)ᵏ δ, λ = 0.95 | 10 |
 | `ppo` | 2,048-step batches (cut episodes continue next batch), shuffled minibatches of 64, advantages normalised per minibatch, learning rates 1e-3 / 3e-3 | 10 × 32 = 320 |
 
 Still on-policy: each batch is played by the current policy, used for its epochs and thrown away. No action is taken during the update; the ratio only re-scores the stored (state, action) pairs under the new policy. The advantages and critic targets are computed once per batch, with the critic before the update.
+
+After every epoch the script measures how far the policy has moved from π_old on the batch (`per_epoch.csv`): KL, the ratio r of the steps pushed furthest, and the share of steps past the clip limit. The Run page shows this averaged over the learning iterations (to compare the steps) and for any single iteration.
 
 Things worth knowing, all visible on the page:
 - **The critic loss grows** as episodes get longer, because the returns it predicts get bigger. Judge the critic by its scale-free error instead.
