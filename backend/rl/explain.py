@@ -33,7 +33,7 @@ from .networks import Actor, Critic
 
 
 class LearnConfig(BaseModel):
-    env_id: Literal["MountainCar-v0", "CartPole-v1", "DoubleCartPole-v0"] = "CartPole-v1"
+    env_id: Literal["MountainCar-v0", "CartPole-v1", "DoubleCartPole-v0", "DoubleCartPoleJoint-v0"] = "CartPole-v1"
     seed: int = 0
     batch_episodes: int | None = Field(None, ge=1, le=50)  # None: 2 for MountainCar, else 5
     hidden: int = Field(8, ge=2, le=64)  # ONE hidden layer, small enough to draw every weight

@@ -21,6 +21,7 @@ MC_GRAVITY = 0.0025
 MC_MAX_SPEED = 0.07
 CP_THETA_LIMIT = 12 * 2 * math.pi / 360  # pole falls beyond ±12°
 DCP_LIMIT = math.radians(15)  # double cart-pole: each stick fails beyond ±15° from vertical
+DCPJ_LOWER, DCPJ_BEND = math.radians(30), math.radians(20)  # joint rule: lower stick ±30°, bend ±20°
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,18 @@ ENV_INFO: dict[str, EnvInfo] = {
         action_names=("left", "right"),
         phase_dims=(2, 4),
         phase_ranges=((-DCP_LIMIT, DCP_LIMIT), (-2 * DCP_LIMIT, 2 * DCP_LIMIT)),
+        phase_base=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        official_max_steps=500,
+    ),
+    "DoubleCartPoleJoint-v0": EnvInfo(
+        # The same system with the joint rule: angles scaled by their limits (lower ±30°, bend ±20°).
+        obs_low=np.array([-2.4, -3.0, -DCPJ_LOWER, -3.5, -DCPJ_BEND, -5.0]),
+        obs_high=np.array([2.4, 3.0, DCPJ_LOWER, 3.5, DCPJ_BEND, 5.0]),
+        obs_names=("cart position", "cart velocity", "lower stick angle", "lower stick angular velocity",
+                   "angle between sticks", "angle between sticks, rate"),
+        action_names=("left", "right"),
+        phase_dims=(2, 4),
+        phase_ranges=((-DCPJ_LOWER, DCPJ_LOWER), (-DCPJ_BEND, DCPJ_BEND)),
         phase_base=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
         official_max_steps=500,
     ),

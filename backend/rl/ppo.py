@@ -40,7 +40,7 @@ from .networks import Actor, Critic
 
 
 class PPOConfig(BaseModel):
-    env_id: Literal["CartPole-v1", "MountainCar-v0", "DoubleCartPole-v0"] = "CartPole-v1"
+    env_id: Literal["CartPole-v1", "MountainCar-v0", "DoubleCartPole-v0", "DoubleCartPoleJoint-v0"] = "CartPole-v1"
     seed: int = 0
     hidden: int = Field(8, ge=2, le=256)
     actor_lr: float = Field(0.01, gt=0)

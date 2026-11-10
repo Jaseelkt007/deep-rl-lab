@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-EnvId = Literal["MountainCar-v0", "CartPole-v1", "DoubleCartPole-v0"]
+EnvId = Literal["MountainCar-v0", "CartPole-v1", "DoubleCartPole-v0", "DoubleCartPoleJoint-v0"]
 
 
 class RunConfig(BaseModel):

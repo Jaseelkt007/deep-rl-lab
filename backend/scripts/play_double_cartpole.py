@@ -4,6 +4,7 @@
     uv run python scripts/play_double_cartpole.py --policy random   # random pushes: falls after ~15 steps
     uv run python scripts/play_double_cartpole.py --policy none     # no push at all: watch the two sticks fall
     uv run python scripts/play_double_cartpole.py --fps 10 --print-every 1   # slow motion, all 6 numbers per step
+    uv run python scripts/play_double_cartpole.py --rule joint --policy none   # the joint rule (lower ≤ 30°, bend ≤ 20°)
 
 The window shows the cart (black), the lower stick (brown) and the top stick (violet) on a free hinge.
 The terminal prints how each episode ended: time limit, cart left the track, lower or top stick fell.
@@ -20,16 +21,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rl.double_cartpole import DoubleCartPoleEnv, reference_controller  # noqa: E402
+from rl.double_cartpole import JOINT_RULE, DoubleCartPoleEnv, reference_controller  # noqa: E402
 
 
 def why_it_ended(env: DoubleCartPoleEnv, terminated: bool) -> str:
-    if not terminated:
-        return "reached the step limit"
-    x, t1, t2 = env.q
-    if abs(x) > env.X_LIMIT:
-        return "cart left the track"
-    return "lower stick fell" if abs(t1) > env.angle_limit else "top stick fell"
+    return env.failure() if terminated else "reached the step limit"
 
 
 def main() -> None:
@@ -40,11 +36,14 @@ def main() -> None:
     ap.add_argument("--fps", type=int, default=50, help="50 = real time (one step = 0.02 s); lower = slow motion")
     ap.add_argument("--print-every", type=int, default=0, help="print the 6 state numbers every N steps (0 = never)")
     ap.add_argument("--start-noise", type=float, default=0.05, help="start: all 6 numbers uniform in ± this")
+    ap.add_argument("--rule", choices=["vertical", "joint"], default="vertical",
+                    help="vertical: both sticks ≤ 15° from vertical; joint: lower ≤ 30°, top bent ≤ 20° from it")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
     levels = (0.0,) if args.policy == "none" else (-10.0, 10.0)  # "none": a single action that pushes 0 N
-    env = DoubleCartPoleEnv(render_mode="human", force_levels=levels, start_noise=args.start_noise)
+    env = DoubleCartPoleEnv(render_mode="human", force_levels=levels, start_noise=args.start_noise,
+                            **(JOINT_RULE if args.rule == "joint" else {}))
     env.metadata = {**env.metadata, "render_fps": args.fps}
     ctrl = reference_controller()
     rng = np.random.default_rng(args.seed)

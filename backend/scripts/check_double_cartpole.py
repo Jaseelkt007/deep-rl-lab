@@ -4,7 +4,8 @@ A deterministic hand-written controller (LQR, the textbook linear controller) pl
 random starts. If even it cannot balance with two constant pushes (±10 N), RL failures would
 mean nothing; then we use more force levels.
 
-    uv run python scripts/check_double_cartpole.py
+    uv run python scripts/check_double_cartpole.py               # the vertical rule (both sticks ≤ 15°)
+    uv run python scripts/check_double_cartpole.py --rule joint  # the joint rule (lower ≤ 30°, bend ≤ 20°)
 
 Controllers, from most to least capable:
     continuous   any force the controller asks for (no limit)     -> are physics + controller right?
@@ -24,34 +25,30 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rl.double_cartpole import DoubleCartPoleEnv, LQRController, Params, rk4_step  # noqa: E402
+from rl.double_cartpole import JOINT_RULE, DoubleCartPoleEnv, LQRController, Params, rk4_step  # noqa: E402
 
 TWO = (-10.0, 10.0)
 FIVE = (-10.0, -5.0, 0.0, 5.0, 10.0)
 
 
-def run(force_fn, seed: int, max_steps: int, start_noise: float, limit_deg: float) -> tuple[int, str]:
+def run(force_fn, seed: int, max_steps: int, start_noise: float, rule: dict) -> tuple[int, str]:
     """One episode with any force function. Returns (steps survived, why it ended)."""
-    env = DoubleCartPoleEnv(start_noise=start_noise, angle_limit_deg=limit_deg)
+    env = DoubleCartPoleEnv(start_noise=start_noise, **rule)
     obs, _ = env.reset(seed=seed)
-    p, lim = env.p, env.angle_limit
     for t in range(1, max_steps + 1):
-        env.q, env.qd = rk4_step(env.q, env.qd, force_fn(obs), p)
+        env.q, env.qd = rk4_step(env.q, env.qd, force_fn(obs), env.p)
         x, t1, t2 = env.q
         obs = np.array([x, env.qd[0], t1, env.qd[1], t2 - t1, env.qd[2] - env.qd[1]])
-        if abs(x) > env.X_LIMIT:
-            return t, "cart left the track"
-        if abs(t1) > lim:
-            return t, "lower stick fell"
-        if abs(t2) > lim:
-            return t, "top stick fell"
+        why = env.failure()
+        if why:
+            return t, why
     return max_steps, "survived"
 
 
-def evaluate(name: str, force_fn, starts: int, max_steps: int, start_noise: float, limit_deg: float) -> dict:
+def evaluate(name: str, force_fn, starts: int, max_steps: int, start_noise: float, rule: dict) -> dict:
     lengths, reasons = [], {}
     for s in range(starts):
-        n, why = run(force_fn, 10_000 + s, max_steps, start_noise, limit_deg)
+        n, why = run(force_fn, 10_000 + s, max_steps, start_noise, rule)
         lengths.append(n)
         reasons[why] = reasons.get(why, 0) + 1
     ok = reasons.get("survived", 0)
@@ -66,9 +63,12 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=500, help="500 = the training episode length")
     ap.add_argument("--long-steps", type=int, default=10_000)
     ap.add_argument("--start-noise", type=float, default=0.05)
-    ap.add_argument("--limit", type=float, default=15.0, help="failure angle of each stick, degrees")
+    ap.add_argument("--rule", choices=["vertical", "joint"], default="vertical",
+                    help="vertical: both sticks ≤ 15° from vertical; joint: lower ≤ 30°, bend between sticks ≤ 20°")
+    ap.add_argument("--quick", action="store_true", help="only the first LQR weighting")
     args = ap.parse_args()
     p = Params()
+    rule = JOINT_RULE if args.rule == "joint" else {}
 
     # LQR weights: how much the controller cares about (x, θ1, θ2, ẋ, θ̇1, θ̇2) vs the push size
     weightings = {
@@ -77,8 +77,13 @@ def main() -> None:
         "angles + cart": (np.diag([10.0, 100.0, 100.0, 1.0, 1.0, 1.0]), 1.0),
         "gentle": (np.diag([1.0, 10.0, 10.0, 0.1, 0.1, 0.1]), 1.0),
     }
-    print(f"start: all 6 numbers in ±{args.start_noise}; fail: |x| > 2.4 or a stick > {args.limit}°; "
-          f"{args.starts} starts\n")
+    if args.quick:
+        weightings = dict(list(weightings.items())[:1])
+    env = DoubleCartPoleEnv(**rule)
+    top = (f"top stick > {math.degrees(env.top_limit):.0f}° from vertical" if env.top_limit is not None
+           else f"top stick bent > {math.degrees(env.joint_limit):.0f}° from the lower stick")
+    print(f"start: all 6 numbers in ±{args.start_noise}; fail: |x| > 2.4, lower stick > "
+          f"{math.degrees(env.lower_limit):.0f}° or {top}; {args.starts} starts\n")
     results = {}
     for wname, (Q, R) in weightings.items():
         ctrl = LQRController(p, TWO, Q=Q, R=R)
@@ -91,7 +96,7 @@ def main() -> None:
             ("5 levels (−10, −5, 0, +5, +10 N)", lambda o, c=five: FIVE[c(o)]),
             ("2 levels (±10 N)", lambda o, c=two: TWO[c(o)]),
         ]:
-            results[(wname, label)] = evaluate(label, fn, args.starts, args.steps, args.start_noise, args.limit)
+            results[(wname, label)] = evaluate(label, fn, args.starts, args.steps, args.start_noise, rule)
         print()
 
     # the best weighting for each action set, tested for much longer
@@ -100,9 +105,8 @@ def main() -> None:
         best = max(weightings, key=lambda w: (results[(w, label)]["survived"], results[(w, label)]["median"]))
         c = LQRController(p, levels, *weightings[best])
         evaluate(f"{label} · '{best}'", lambda o, c=c, lv=levels: lv[c(o)], 20, args.long_steps,
-                 args.start_noise, args.limit)
+                 args.start_noise, rule)
     print(f"\n(one step = 0.02 s; 500 steps = 10 s; {args.long_steps} steps = {args.long_steps * 0.02 / 60:.1f} min)")
-    _ = math
 
 
 if __name__ == "__main__":

@@ -67,11 +67,11 @@ def test_failure_rules_and_start():
     obs, _ = env.reset(seed=0)
     assert obs.shape == (6,) and np.all(np.abs(obs) <= 0.05)
     env.q, env.qd = np.array([2.5, 0.0, 0.0]), np.zeros(3)  # cart off the track
-    assert env.step(0)[2]
+    assert env.step(0)[4]["failure"] == "cart left the track"
     env.q, env.qd = np.array([0.0, 0.0, math.radians(16)]), np.zeros(3)  # top stick past 15°
-    assert env.step(1)[2]
+    assert env.step(1)[4]["failure"] == "top stick fell"
     env.q, env.qd = np.array([0.0, math.radians(16), 0.0]), np.zeros(3)  # lower stick past 15°
-    assert env.step(1)[2]
+    assert env.step(1)[4]["failure"] == "lower stick fell"
     env.reset(seed=0)
     assert env.step(1)[1] == 1.0  # reward "alive"
 
@@ -81,7 +81,7 @@ def test_upright_reward_is_one_when_straight_and_zero_at_the_limit():
     env.reset(seed=0)
     env.q, env.qd = np.zeros(3), np.zeros(3)
     assert env.step(0)[1] > 0.999
-    env.q, env.qd = np.array([0.0, env.angle_limit, env.angle_limit]) * 0.999, np.zeros(3)
+    env.q, env.qd = np.array([0.0, env.lower_limit, env.top_limit]) * 0.999, np.zeros(3)
     assert env.step(0)[1] < 0.01
 
 
@@ -91,3 +91,23 @@ def test_lqr_stabilises_the_linear_model():
     Ad, Bd = discretize(*linear_model(p), p.dt)
     eig = np.linalg.eigvals(Ad - Bd @ ctrl.K[None, :])
     assert np.max(np.abs(eig)) < 1.0
+
+
+def test_joint_rule_lets_the_sticks_lean_together_but_not_bend():
+    import gymnasium as gym
+
+    env = gym.make("DoubleCartPoleJoint-v0").unwrapped
+    env.reset(seed=0)
+    # both lean 25°, in line (φ = 0): fine under the joint rule, a failure under the vertical rule
+    env.q, env.qd = np.array([0.0, math.radians(25), math.radians(25)]), np.zeros(3)
+    assert env.failure() is None
+    assert gym.make("DoubleCartPole-v0").unwrapped.__class__ is env.__class__
+    vertical = DoubleCartPoleEnv()
+    vertical.q, vertical.qd = env.q.copy(), np.zeros(3)
+    assert vertical.failure() == "lower stick fell"
+    # bent 21° away from the lower stick: fails
+    env.q = np.array([0.0, math.radians(5), math.radians(26)])
+    assert env.failure() == "top stick bent too far"
+    # the lower stick past 30°
+    env.q = np.array([0.0, math.radians(31), math.radians(31)])
+    assert env.failure() == "lower stick fell"

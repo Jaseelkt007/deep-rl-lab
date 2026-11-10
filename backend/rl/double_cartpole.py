@@ -16,9 +16,13 @@ Observation (6 numbers):  x, ẋ, θ1, θ̇1, φ, φ̇      (angles in rad, posi
     the absolute angle of the top stick is θ2 = θ1 + φ
 Actions:   `force_levels` constant pushes, default ±10 N (two actions, like CartPole)
 Reward:    "alive":   +1 per step (like CartPole)
-           "upright": 1 − ½(θ1/limit)² − ½(θ2/limit)²   (1 = both straight, 0 at the limit)
-Ends:      terminated if the cart leaves the track (|x| > 2.4) or either stick leans more
-           than `angle_limit` from vertical; truncated after 500 steps (TimeLimit).
+           "upright": 1 − ½(θ1/its limit)² − ½(top-stick angle/its limit)²  (1 = straight, 0 at the limit)
+Ends:      terminated if the cart leaves the track (|x| > 2.4), the lower stick leans more than
+           `lower_limit_deg` from vertical, or the top stick breaks its rule:
+             "vertical" rule (DoubleCartPole-v0):    top stick > `top_limit_deg` from vertical (15°)
+             "joint" rule (DoubleCartPoleJoint-v0):  top stick bent > `joint_limit_deg` away from the
+                                                     lower stick (|φ| > 20°); lower stick limit 30°
+           truncated after 500 steps (TimeLimit).
 Start:     all 6 numbers uniform in ±0.05 (almost straight, like CartPole).
 
 Physics: Lagrange's equations for a cart (mass M) with two uniform rods (mass m, length L,
@@ -131,15 +135,20 @@ class DoubleCartPoleEnv(gym.Env):
     X_LIMIT = 2.4
 
     def __init__(self, render_mode: str | None = None, force_levels: tuple[float, ...] = (-10.0, 10.0),
-                 angle_limit_deg: float = 15.0, reward: str = "alive", start_noise: float = 0.05,
+                 lower_limit_deg: float = 15.0, top_limit_deg: float | None = 15.0,
+                 joint_limit_deg: float | None = None, reward: str = "alive", start_noise: float = 0.05,
                  params: Params = Params()):
+        """top_limit_deg: the top stick's limit from vertical (None = no such rule);
+        joint_limit_deg: its limit relative to the lower stick, the bend φ (None = no such rule)."""
         self.p = params
         self.force_levels = tuple(float(f) for f in force_levels)
-        self.angle_limit = math.radians(angle_limit_deg)
+        self.lower_limit = math.radians(lower_limit_deg)
+        self.top_limit = None if top_limit_deg is None else math.radians(top_limit_deg)
+        self.joint_limit = None if joint_limit_deg is None else math.radians(joint_limit_deg)
         self.reward_mode = reward
         self.start_noise = start_noise
         self.action_space = spaces.Discrete(len(self.force_levels))
-        hi = np.array([self.X_LIMIT * 2, np.inf, self.angle_limit * 2, np.inf, self.angle_limit * 4, np.inf])
+        hi = np.array([self.X_LIMIT * 2, np.inf, np.pi, np.inf, 2 * np.pi, np.inf])
         self.observation_space = spaces.Box(-hi, hi, dtype=np.float64)
         self.render_mode = render_mode
         self._screen = self._clock = None
@@ -158,16 +167,30 @@ class DoubleCartPoleEnv(gym.Env):
     def step(self, action):
         force = self.force_levels[int(action)]
         self.q, self.qd = rk4_step(self.q, self.qd, force, self.p)
-        x, t1, t2 = self.q
-        terminated = bool(abs(x) > self.X_LIMIT or abs(t1) > self.angle_limit or abs(t2) > self.angle_limit)
+        why = self.failure()
+        terminated = why is not None
         if self.reward_mode == "upright":
-            r = 1.0 - 0.5 * (t1 / self.angle_limit) ** 2 - 0.5 * (t2 / self.angle_limit) ** 2
-            reward = max(0.0, r)
+            _, t1, t2 = self.q
+            top, lim = (t2, self.top_limit) if self.top_limit is not None else (t2 - t1, self.joint_limit)
+            reward = max(0.0, 1.0 - 0.5 * (t1 / self.lower_limit) ** 2 - 0.5 * (top / lim) ** 2)
         else:
             reward = 1.0
         if self.render_mode == "human":
             self.render()
-        return to_obs(self.q, self.qd), reward, terminated, False, {"force": force}
+        return to_obs(self.q, self.qd), reward, terminated, False, {"force": force, "failure": why}
+
+    def failure(self) -> str | None:
+        """Why the current state ends the episode, or None."""
+        x, t1, t2 = self.q
+        if abs(x) > self.X_LIMIT:
+            return "cart left the track"
+        if abs(t1) > self.lower_limit:
+            return "lower stick fell"
+        if self.top_limit is not None and abs(t2) > self.top_limit:
+            return "top stick fell"
+        if self.joint_limit is not None and abs(t2 - t1) > self.joint_limit:
+            return "top stick bent too far"
+        return None
 
     # ------------------------------------------------------------------ drawing
     def render(self):
@@ -279,6 +302,12 @@ class LQRController:
 # gym.make("DoubleCartPole-v0") -> this env with a 500-step TimeLimit (truncated at 500)
 if "DoubleCartPole-v0" not in gym.registry:
     gym.register(id="DoubleCartPole-v0", entry_point="rl.double_cartpole:DoubleCartPoleEnv", max_episode_steps=500)
+# The joint rule: the top stick may lean with the lower one; it fails only when bent > 20° away
+# from it. The lower stick may lean up to 30°.
+JOINT_RULE = {"lower_limit_deg": 30.0, "top_limit_deg": None, "joint_limit_deg": 20.0}
+if "DoubleCartPoleJoint-v0" not in gym.registry:
+    gym.register(id="DoubleCartPoleJoint-v0", entry_point="rl.double_cartpole:DoubleCartPoleEnv",
+                 max_episode_steps=500, kwargs=JOINT_RULE)
 
 
 def reference_controller() -> LQRController:

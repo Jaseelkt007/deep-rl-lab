@@ -133,7 +133,10 @@ class EnvSpec:
             self.reference = lambda s: 1 if s[2] + 0.5 * s[3] > 0 else 0
             self.angles = lambda s: abs(float(s[2]))  # for the quality test: mean |pole angle|
         else:
-            self.env_id, self.title, self.folder = "DoubleCartPole-v0", "Double CartPole", "double_cartpole"
+            joint = key == "double_cartpole_joint"
+            self.env_id = "DoubleCartPoleJoint-v0" if joint else "DoubleCartPole-v0"
+            self.title = "Double CartPole (joint rule)" if joint else "Double CartPole"
+            self.folder = key
             self.reference_text = "the LQR controller, ±10 N"
             ctrl = reference_controller()
             self.reference = lambda s: ctrl(np.asarray(s))
@@ -300,13 +303,14 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
 
 
 def web_page() -> str:
-    return "http://localhost:3000" + ("" if SPEC.key == "cartpole" else "/double")
+    return "http://localhost:3000" + {"cartpole": "", "double_cartpole": "/double"}.get(SPEC.key, "/double-joint")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--env", choices=["cartpole", "double_cartpole"], default="cartpole",
-                    help="cartpole (one stick) or double_cartpole (two sticks on a free hinge)")
+    ap.add_argument("--env", choices=["cartpole", "double_cartpole", "double_cartpole_joint"], default="cartpole",
+                    help="cartpole (one stick), double_cartpole (two sticks on a free hinge, each ≤ 15° from "
+                         "vertical) or double_cartpole_joint (lower stick ≤ 30°, top stick bent ≤ 20° from it)")
     ap.add_argument("--algo", choices=[*ALGOS, "all"], default="batch_ac",
                     help="batch_ac | epochs | ratio | clip | gae | ppo, or all of them one after another")
     ap.add_argument("--budget", type=int, default=200_000, help="environment steps to train for (the same for every algorithm)")
