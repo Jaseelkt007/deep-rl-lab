@@ -391,12 +391,13 @@ def train(algo: str, args) -> None:
             if it == 1 or it % args.record_every == 0 or last:
                 ep = record_episode(session, it, out_dir / "episodes")
                 print(f"     ↳ recorded the current policy playing: {ep['steps']} steps (episodes/{ep['name']}.gif)")
-                if args.render_every and it % args.render_every == 0:
-                    try:  # the same episode again, live in a window
-                        evaluate(lambda st: greedy_action(session, st), episodes=1, render=True)
-                    except Exception as err:  # no display available
-                        print(f"     ↳ cannot open a window ({err}); use --render-every 0")
-                        args.render_every = 0
+            if args.render_every and it % args.render_every == 0:  # independent of --record-every
+                print(f"     ↳ showing the current policy in a window (iteration {it}) …")
+                try:
+                    evaluate(lambda st: greedy_action(session, st), episodes=1, render=True)
+                except Exception as err:  # no display available
+                    print(f"     ↳ cannot open a window ({err}); use --render-every 0")
+                    args.render_every = 0
             status("running", it, env_steps)
             if fig is not None and (live or last):
                 _draw(fig, axes, rows, live)
