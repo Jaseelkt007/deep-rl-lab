@@ -405,10 +405,19 @@ def _num(v: str):
         return v
 
 
-def _cli_dir(algo: str):
-    d = runs_dir() / "cli" / algo
+CLI_ENVS = {"cartpole": "cli", "double_cartpole": "double_cartpole"}  # ?env=... -> folder in runs/
+
+
+def _cli_root(env: str):
+    if env not in CLI_ENVS:
+        raise HTTPException(404, f"unknown env '{env}'")
+    return runs_dir() / CLI_ENVS[env]
+
+
+def _cli_dir(algo: str, env: str = "cartpole"):
+    d = _cli_root(env) / algo
     if not CLI_ALGO_RE.match(algo) or not (d / "settings.json").exists():
-        raise HTTPException(404, f"no run for '{algo}' yet: uv run python scripts/train_cartpole.py --algo {algo}")
+        raise HTTPException(404, f"no run for '{algo}' yet: uv run python scripts/train_cartpole.py --env {env} --algo {algo}")
     return d
 
 
@@ -449,10 +458,10 @@ def _cli_json(path):
 
 
 @app.get("/api/cli/algos")
-def cli_algos() -> list[dict]:
+def cli_algos(env: str = "cartpole") -> list[dict]:
     """Every algorithm that has a run: status, settings, scorecard and its speed curve (for comparing)."""
     out = []
-    for settings in sorted((runs_dir() / "cli").glob("*/settings.json")):
+    for settings in sorted(_cli_root(env).glob("*/settings.json")):
         d = settings.parent
         rows = _cli_rows(d)
         out.append(clean({
@@ -473,30 +482,30 @@ def _cli_episodes(d) -> list[dict]:
 
 
 @app.get("/api/cli/run/{algo}")
-def cli_run(algo: str) -> dict:
-    d = _cli_dir(algo)
+def cli_run(algo: str, env: str = "cartpole") -> dict:
+    d = _cli_dir(algo, env)
     return clean({"algo": algo, "settings": json.loads((d / "settings.json").read_text()),
                   "status": _cli_json(d / "status.json") or {}, "rows": _cli_rows(d), "episodes": _cli_episodes(d),
                   "per_epoch": _cli_per_epoch(d), "scorecard": _cli_json(d / "scorecard.json")})
 
 
 @app.get("/api/cli/run/{algo}/episodes")
-def cli_episode_list(algo: str) -> list[dict]:
+def cli_episode_list(algo: str, env: str = "cartpole") -> list[dict]:
     """The recorded episodes of one algorithm (no trajectories), for the side-by-side replay."""
-    return _cli_episodes(_cli_dir(algo))
+    return _cli_episodes(_cli_dir(algo, env))
 
 
 @app.get("/api/cli/run/{algo}/episode/{name}")
-def cli_episode(algo: str, name: str) -> dict:
-    p = _cli_dir(algo) / "episodes" / f"{name}.json"
+def cli_episode(algo: str, name: str, env: str = "cartpole") -> dict:
+    p = _cli_dir(algo, env) / "episodes" / f"{name}.json"
     if not CLI_NAME_RE.match(name) or not p.exists():
         raise HTTPException(404, f"no episode {name}")
     return json.loads(p.read_text())
 
 
 @app.get("/api/cli/run/{algo}/gif/{name}")
-def cli_gif(algo: str, name: str):
-    p = _cli_dir(algo) / "episodes" / f"{name}.gif"
+def cli_gif(algo: str, name: str, env: str = "cartpole"):
+    p = _cli_dir(algo, env) / "episodes" / f"{name}.gif"
     if not CLI_NAME_RE.match(name) or not p.exists():
         raise HTTPException(404, f"no gif {name}")
     return FileResponse(p, media_type="image/gif")

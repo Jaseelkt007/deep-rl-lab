@@ -120,3 +120,17 @@ def test_cli_endpoints(client, tmp_path):
     assert client.get("/api/cli/run/ppo/episodes").json() == [{"name": "iter0001", "iter": 1, "steps": 3, "terminated": True}]
     assert client.get("/api/cli/run/ppo/episode/..%2Fsettings").status_code == 404
     assert client.get("/api/cli/run/nope").status_code == 404
+
+
+def test_cli_endpoints_per_environment(client, tmp_path):
+    import json as _json
+
+    d = tmp_path / "double_cartpole" / "clip"
+    (d / "episodes").mkdir(parents=True)
+    (d / "settings.json").write_text(_json.dumps({"algo": "clip", "env": "double_cartpole", "config": {}}))
+    (d / "log.csv").write_text("iter,ret,env_steps,eval\n1,12.0,60,8.0\n")
+    assert [a["algo"] for a in client.get("/api/cli/algos?env=double_cartpole").json()] == ["clip"]
+    assert client.get("/api/cli/algos").json() == []  # CartPole runs live in runs/cli/
+    assert client.get("/api/cli/run/clip?env=double_cartpole").json()["rows"][0]["ret"] == 12.0
+    assert client.get("/api/cli/run/clip").status_code == 404
+    assert client.get("/api/cli/algos?env=nope").status_code == 404
