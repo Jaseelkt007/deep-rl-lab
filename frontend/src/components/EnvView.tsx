@@ -243,8 +243,10 @@ function drawLunarLander(ctx: CanvasRenderingContext2D, W: number, H: number, st
     ctx.fill();
   };
   if (actionName === "main engine") flame(0, 9, 0, 1);
-  if (actionName === "left engine") flame(-13, 0, -1, 0);
-  if (actionName === "right engine") flame(13, 0, 1, 0);
+  // Gymnasium names the side engines by the way they PUSH: "left engine" (action 1) has its nozzle on the
+  // right side and blows its gas to the right, so the lander goes left (and turns counter-clockwise).
+  if (actionName === "left engine") flame(13, -4, 1, 0);
+  if (actionName === "right engine") flame(-13, -4, -1, 0);
   // legs
   ctx.lineWidth = 2.5;
   for (const [side, down] of [

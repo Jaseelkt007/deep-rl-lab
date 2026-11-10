@@ -471,7 +471,7 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
       { name: "left leg down", unit: "", range: "0 or 1", scale: 0.5, offset: 0.5 },
       { name: "right leg down", unit: "", range: "0 or 1", scale: 0.5, offset: 0.5 },
     ],
-    reward: "shaped: closer to the pad, slower and level is better; each leg touching +10; main engine −0.3 and side engines −0.03 per step; +100 for landing, −100 for crashing",
+    reward: "shaped: closer to the pad, slower and level is better; each leg touching +10; main engine −0.3 and side engines −0.03 per step; +100 for landing, −100 for crashing. The side engines are named by the way they push: 'left engine' blows its gas to the right, so the lander moves left and turns counter-clockwise",
     ends: "terminated: landed (comes to rest), crashed (the body touches the ground) or flew away (|x| ≥ 1) · truncated: 1,000 steps",
     goodPolicy: "Gymnasium's hand-written heuristic",
     goodAction: () => 0,
