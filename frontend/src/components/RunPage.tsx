@@ -446,17 +446,47 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
 }
 
 // ------------------------------------------------------------------ episode replay
-function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
+/** Play / pause / scrub through n steps. */
+function usePlayback(n: number) {
   const [i, setI] = useState(0);
   const [want, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(50);
-  const n = ep.actions.length;
   const playing = want && i < n - 1;
   useEffect(() => {
     if (!playing) return;
     const id = window.setInterval(() => setI((k) => Math.min(n - 1, k + 1)), 1000 / speed);
     return () => window.clearInterval(id);
   }, [playing, speed, n]);
+  return { i, n, playing, setI, setPlaying, speed, setSpeed };
+}
+
+function Controls({ pb, children }: { pb: ReturnType<typeof usePlayback>; children?: ReactNode }) {
+  const { i, n, playing, setI, setPlaying, speed, setSpeed } = pb;
+  return (
+    <div className="mt-2 flex items-center gap-2 text-[12px]">
+      <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => (i >= n - 1 ? (setI(0), setPlaying(true)) : setPlaying(!playing))}>
+        {playing ? "❚❚" : "▶"}
+      </button>
+      <input type="range" min={0} max={n - 1} value={i} onChange={(e) => (setPlaying(false), setI(+e.target.value))} className="flex-1" />
+      <span className="w-20 tabular-nums text-neutral-600">
+        step {i + 1}/{n}
+      </span>
+      <select className="rounded border border-neutral-300 px-1 py-0.5" value={speed} onChange={(e) => setSpeed(+e.target.value)}>
+        {[10, 25, 50, 100, 200].map((v) => (
+          <option key={v} value={v}>
+            {v}/s
+          </option>
+        ))}
+      </select>
+      {children}
+    </div>
+  );
+}
+
+function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
+  const n = ep.actions.length;
+  const pb = usePlayback(n);
+  const i = pb.i;
   const s = ep.states[i];
   const step = { s, a: ep.actions[i], p: ep.probs[i] } as unknown as StepRec;
   const good = s[2] + 0.5 * s[3] > 0 ? 1 : 0;
@@ -470,25 +500,11 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
       <div>
         <EnvView envId="CartPole-v1" step={step} trail={[]} actionNames={[...actions]} />
-        <div className="mt-2 flex items-center gap-2 text-[12px]">
-          <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => (i >= n - 1 ? (setI(0), setPlaying(true)) : setPlaying(!playing))}>
-            {playing ? "❚❚" : "▶"}
-          </button>
-          <input type="range" min={0} max={n - 1} value={i} onChange={(e) => (setPlaying(false), setI(+e.target.value))} className="flex-1" />
-          <span className="w-20 tabular-nums text-neutral-600">
-            step {i + 1}/{n}
-          </span>
-          <select className="rounded border border-neutral-300 px-1 py-0.5" value={speed} onChange={(e) => setSpeed(+e.target.value)}>
-            {[10, 25, 50, 100, 200].map((v) => (
-              <option key={v} value={v}>
-                {v}/s
-              </option>
-            ))}
-          </select>
+        <Controls pb={pb}>
           <a className="text-[#2a78d6] hover:underline" href={`${BACKEND}/api/cli/run/${algo}/gif/${ep.name}`} target="_blank" rel="noreferrer">
             GIF
           </a>
-        </div>
+        </Controls>
       </div>
       <div className="space-y-3">
         <table className="w-full text-[12px] tabular-nums">
@@ -588,6 +604,216 @@ function Episodes({ data }: { data: RunData }) {
       </div>
       {ep && ep.name === current && <Player key={ep.name} ep={ep} algo={data.algo} />}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ side by side
+type Side = AlgoKey | "good";
+type IterPick = "final" | number;
+
+function endText(ep: Episode) {
+  if (!ep.terminated) return `${ep.steps} steps: time limit reached, still balancing`;
+  const s = ep.states.at(-1)!;
+  return Math.abs(s[0]) / 2.4 > Math.abs(s[2]) / 0.2095 ? `cart left the track after ${ep.steps} steps` : `pole fell after ${ep.steps} steps`;
+}
+
+interface SideView {
+  label: string;
+  sub: string;
+  color: string;
+  ep: Episode;
+}
+
+/** Two recorded episodes played together, one shared play / pause / slider. */
+function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
+  const n = Math.max(a.ep.actions.length, b.ep.actions.length);
+  const pb = usePlayback(n);
+  const actions = [...CARTPOLE.actions];
+  const trace = useMemo(() => {
+    const x = Array.from({ length: n }, (_, k) => k + 1);
+    const col = (ep: Episode, j: number, scale: number) => x.map((_, k) => (k < ep.states.length ? ep.states[k][j] / scale : null));
+    return {
+      x,
+      ys: [col(a.ep, 2, 0.2095), col(b.ep, 2, 0.2095), col(a.ep, 0, 2.4), col(b.ep, 0, 2.4)],
+      series: [
+        { label: `${a.label}: pole angle`, color: a.color, width: 1.75 },
+        { label: `${b.label}: pole angle`, color: b.color, width: 1.75 },
+        { label: `${a.label}: cart position`, color: a.color, width: 1.25, dash: [5, 3] },
+        { label: `${b.label}: cart position`, color: b.color, width: 1.25, dash: [5, 3] },
+      ],
+    };
+  }, [a.ep, b.ep, a.label, b.label, a.color, b.color, n]);
+  return (
+    <div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {[a, b].map((sd, k) => {
+          const len = sd.ep.actions.length;
+          const j = Math.min(pb.i, len - 1);
+          const s = sd.ep.states[j];
+          const step = { s, a: sd.ep.actions[j], p: sd.ep.probs[j] } as unknown as StepRec;
+          const ended = pb.i >= len - 1 && sd.ep.terminated;
+          return (
+            <div key={k}>
+              <div className="mb-1 flex flex-wrap items-baseline gap-x-2 text-[12.5px]">
+                <Swatch color={sd.color} dashed={sd.color === GOOD_COLOR} />
+                <b className="font-medium text-neutral-900">{sd.label}</b>
+                <span className="text-[11.5px] text-neutral-500">{sd.sub}</span>
+              </div>
+              <div className="relative">
+                <EnvView envId="CartPole-v1" step={step} trail={[]} actionNames={actions} />
+                {ended && (
+                  <div className="absolute left-1/2 top-2 -translate-x-1/2 rounded bg-[#e34948] px-2 py-0.5 text-[11.5px] font-medium text-white">{endText(sd.ep)}</div>
+                )}
+              </div>
+              <div className="mt-1 text-[11.5px] tabular-nums text-neutral-600">
+                step {j + 1}/{len} · cart {s[0].toFixed(2)} m · pole {((s[2] * 180) / Math.PI).toFixed(1)}°{" "}
+                {!sd.ep.terminated && pb.i >= len - 1 && <span className="text-[#0b7a52]">· reached 500</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <Controls pb={pb} />
+      <div className="mt-2 text-[11px] text-neutral-500">pole angle / 12° (solid) and cart position / 2.4 m (dashed): ±1 = the episode ends</div>
+      <UChart x={trace.x} ys={trace.ys} series={trace.series} height={140} yRange={[-1, 1]} markers={[{ x: pb.i + 1, label: "", color: C.ink2 }]} xLabel="step" />
+    </div>
+  );
+}
+
+function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoKey }) {
+  const have = LADDER.filter((l) => algos.some((a) => a.algo === l.key)).map((l) => l.key);
+  const by = Object.fromEntries(algos.map((a) => [a.algo, a])) as Partial<Record<AlgoKey, AlgoSummary>>;
+  const [leftPick, setLeft] = useState<Side | null>(null);
+  const [rightPick, setRight] = useState<Side | null>(null);
+  const [pick, setPick] = useState<IterPick>("final");
+  const [lists, setLists] = useState<Record<string, EpisodeInfo[]>>({});
+  const [eps, setEps] = useState<Record<string, Episode>>({});
+
+  // defaults: batch actor-critic on the left, the algorithm selected below on the right
+  const left: Side = leftPick ?? (have.includes("batch_ac") ? "batch_ac" : (have[0] ?? "good"));
+  const right: Side = rightPick ?? (selected !== left && have.includes(selected) ? selected : (have.find((k) => k !== left) ?? "good"));
+  const source = (s: Side): AlgoKey | undefined => (s === "good" ? have[0] : s); // the good policy is saved with every run
+  const ver = (k: AlgoKey | undefined) => (k ? `${k}|${by[k]?.status.started}|${by[k]?.status.iter}` : "");
+  const srcL = source(left);
+  const srcR = source(right);
+  const verL = ver(srcL);
+  const verR = ver(srcR);
+
+  // the list of recorded episodes of each side; refetched when that run moves on
+  useEffect(() => {
+    let alive = true;
+    for (const [k, v] of [
+      [srcL, verL],
+      [srcR, verR],
+    ] as const) {
+      if (!k || lists[v]) continue;
+      fetch(`${BACKEND}/api/cli/run/${k}/episodes`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: EpisodeInfo[] | null) => alive && d && setLists((prev) => ({ ...prev, [v]: d })))
+        .catch(() => {});
+    }
+    return () => {
+      alive = false;
+    };
+  }, [srcL, srcR, verL, verR, lists]);
+
+  const learned = (s: Side) => (s === "good" ? [] : (lists[ver(s)] ?? []).filter((e) => e.name !== "good"));
+  const resolve = (s: Side): EpisodeInfo | null | undefined => {
+    const list = lists[ver(source(s))];
+    if (!list) return undefined; // still loading
+    if (s === "good") return list.find((e) => e.name === "good") ?? null;
+    const l = learned(s);
+    return pick === "final" ? (l.at(-1) ?? null) : (l.find((e) => e.iter === pick) ?? null);
+  };
+  const infoL = resolve(left);
+  const infoR = resolve(right);
+  const keyL = infoL && srcL ? `${verL}|${infoL.name}` : "";
+  const keyR = infoR && srcR ? `${verR}|${infoR.name}` : "";
+
+  // the two episodes themselves (cached)
+  useEffect(() => {
+    let alive = true;
+    for (const [k, src, info] of [
+      [keyL, srcL, infoL],
+      [keyR, srcR, infoR],
+    ] as const) {
+      if (!k || !src || !info || eps[k]) continue;
+      fetch(`${BACKEND}/api/cli/run/${src}/episode/${info.name}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((e: Episode | null) => alive && e && setEps((prev) => ({ ...prev, [k]: e })))
+        .catch(() => {});
+    }
+    return () => {
+      alive = false;
+    };
+  }, [keyL, keyR, srcL, srcR, infoL, infoR, eps]);
+
+  // iterations recorded in either run (a run's own last iteration is under "final")
+  const sets = [left, right].filter((s) => s !== "good").map((s) => learned(s).map((e) => e.iter));
+  const finals = sets.map((s) => s.at(-1));
+  const iters = Array.from(new Set(sets.flat()))
+    .sort((x, y) => x - y)
+    .filter((it) => sets.every((s) => s.includes(it)) || !finals.includes(it));
+
+  const view = (s: Side, info: EpisodeInfo, ep: Episode): SideView => {
+    if (s === "good") return { label: "good policy", sub: `hand-written: ${CARTPOLE.goodPolicy}`, color: GOOD_COLOR, ep };
+    const steps = by[s]?.speed.find((p) => p.iter === info.iter)?.env_steps;
+    const isFinal = learned(s).at(-1)?.name === info.name && !isLive(by[s]?.status);
+    return {
+      label: LADDER_BY[s].tab,
+      sub: `${isFinal ? "final, " : ""}iteration ${info.iter}${steps != null ? ` · trained on ${num(steps)} env steps` : ""}`,
+      color: LADDER_BY[s].color,
+      ep,
+    };
+  };
+  const epL = eps[keyL];
+  const epR = eps[keyR];
+  const missing = (s: Side, info: EpisodeInfo | null | undefined) =>
+    info === null && s !== "good" ? `${LADDER_BY[s].tab}: no episode recorded at iteration ${pick} (its run has ${learned(s).at(-1)?.iter ?? 0} iterations)` : null;
+
+  const select = (value: Side, set: (s: Side) => void) => (
+    <select className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-[12px]" value={value} onChange={(e) => set(e.target.value as Side)}>
+      {have.map((k) => (
+        <option key={k} value={k}>
+          {LADDER_BY[k].tab}
+        </option>
+      ))}
+      <option value="good">good policy (hand-written)</option>
+    </select>
+  );
+
+  return (
+    <Panel
+      title="Side by side: two policies, same start"
+      help="Every recorded episode starts from the same state and always takes the most likely action, so two policies can be compared directly. Pick what goes left and right, and the iteration (the same for both). Careful: one iteration is not the same amount of experience in every algorithm (a PPO iteration is 2,048 steps), so each side also shows how many environment steps it had trained on."
+    >
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-[12px]">
+        {select(left, setLeft)}
+        <span className="text-neutral-400">vs</span>
+        {select(right, setRight)}
+        <span className="ml-3 text-neutral-500">iteration</span>
+        {(["final", ...iters] as IterPick[]).map((it) => (
+          <button
+            key={it}
+            onClick={() => setPick(it)}
+            className={`rounded border px-2 py-0.5 tabular-nums ${pick === it ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300 bg-white"}`}
+          >
+            {it}
+          </button>
+        ))}
+      </div>
+      {missing(left, infoL) || missing(right, infoR) ? (
+        <div className="py-8 text-center text-[12px] text-neutral-500">
+          {[missing(left, infoL), missing(right, infoR)].filter(Boolean).map((m) => (
+            <div key={m}>{m}</div>
+          ))}
+        </div>
+      ) : epL && epR && infoL && infoR ? (
+        <DualPlayer key={`${keyL}::${keyR}`} a={view(left, infoL, epL)} b={view(right, infoR, epR)} />
+      ) : (
+        <div className="py-8 text-center text-[12px] text-neutral-400">loading…</div>
+      )}
+    </Panel>
   );
 }
 
@@ -948,6 +1174,8 @@ export default function RunPage() {
         {err && <div className="rounded-lg border border-neutral-200 bg-white px-4 py-3 text-[12px] text-neutral-600">{err}</div>}
 
         {algos && algos.length > 0 && <Compare algos={algos} selected={algo} onSelect={setPicked} />}
+
+        {algos && algos.length > 0 && <SideBySide algos={algos} selected={algo} />}
 
         {/* the selected algorithm */}
         <div className="rounded-lg border border-neutral-200 bg-white px-4 py-3">
