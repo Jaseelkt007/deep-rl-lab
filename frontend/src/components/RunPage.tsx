@@ -86,6 +86,28 @@ interface EpisodeInfo {
   iter: number;
   steps: number;
   terminated: boolean;
+  kind?: "greedy" | "training" | "good"; // greedy: most likely action from the fixed start; training: a real batch episode
+}
+type Mode = "greedy" | "training";
+/** greedy recordings and training episodes; runs from before training episodes were recorded have no `kind` */
+const ofKind = (e: EpisodeInfo, mode: Mode) => (e.kind ?? (e.name === "good" ? "good" : "greedy")) === mode;
+
+/** The switch between the most likely action and the actions as sampled in training. */
+function ModeSwitch({ mode, setMode }: { mode: Mode; setMode: (m: Mode) => void }) {
+  return (
+    <span className="flex rounded bg-neutral-100 p-0.5 text-[11px]">
+      {(
+        [
+          ["greedy", "most likely action"],
+          ["training", "as in training (sampled)"],
+        ] as const
+      ).map(([k, label]) => (
+        <button key={k} onClick={() => setMode(k)} className={`rounded px-1.5 ${mode === k ? "bg-white shadow-sm" : "text-neutral-500"}`}>
+          {label}
+        </button>
+      ))}
+    </span>
+  );
 }
 interface RunData {
   algo: AlgoKey;
@@ -821,6 +843,12 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
   const s = ep.states[i];
   const step = { s, a: ep.actions[i], p: ep.probs[i] } as unknown as StepRec;
   const good = ep.good_actions?.[i] ?? env.goodAction(s);
+  // a sampled step that was NOT the most likely action: exploration
+  const explored = ep.kind === "training" && ep.actions[i] !== ep.probs[i].indexOf(Math.max(...ep.probs[i]));
+  const exploredShare = useMemo(
+    () => (ep.kind === "training" ? ep.actions.filter((a, k) => a !== ep.probs[k].indexOf(Math.max(...ep.probs[k]))).length / ep.actions.length : null),
+    [ep],
+  );
   const trace = useMemo(
     () => ({
       x: ep.states.map((_, k) => k + 1),
@@ -835,10 +863,17 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
       <div>
         <EnvView envId={env.envId} step={step} trail={[]} actionNames={actions} />
+        {exploredShare != null && (
+          <div className="mt-1 text-[11px] text-neutral-500">
+            a real training episode (its own start): the sampled action was not the most likely one on {(exploredShare * 100).toFixed(0)}% of the steps
+          </div>
+        )}
         <Controls pb={pb}>
-          <a className="text-[#2a78d6] hover:underline" href={`${BACKEND}/api/cli/run/${algo}/gif/${ep.name}${q(env)}`} target="_blank" rel="noreferrer">
-            GIF
-          </a>
+          {ep.kind !== "training" && (
+            <a className="text-[#2a78d6] hover:underline" href={`${BACKEND}/api/cli/run/${algo}/gif/${ep.name}${q(env)}`} target="_blank" rel="noreferrer">
+              GIF
+            </a>
+          )}
         </Controls>
       </div>
       <div className="space-y-3">
@@ -862,6 +897,7 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
             <tr>
               <td className="py-0.5 text-neutral-500">{ep.name === "good" ? "good policy" : "agent"} pushes</td>
               <td className="py-0.5 text-right" style={{ color: ACTION_COLORS[actions[ep.actions[i]]] }}>
+                {explored && <span className="mr-1 rounded bg-[#fdf3dc] px-1 text-[10.5px] text-[#8a5a00]">explored</span>}
                 {actions[ep.actions[i]]}
               </td>
               <td className="py-0.5 text-right text-neutral-400">P {ep.probs[i][ep.actions[i]].toFixed(2)}</td>
@@ -888,11 +924,13 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
 
 function Episodes({ data }: { data: RunData }) {
   const env = useEnv();
-  const learned = data.episodes.filter((e) => e.name !== "good");
+  const [mode, setMode] = useState<Mode>("greedy");
+  const learned = data.episodes.filter((e) => ofKind(e, mode));
+  const hasTraining = data.episodes.some((e) => ofKind(e, "training"));
   const good = data.episodes.find((e) => e.name === "good");
   const finalIter = data.status.state !== "running" ? learned.at(-1)?.iter : undefined;
   const [sel, setSel] = useState<string | null>(null);
-  const current = sel ?? learned.at(-1)?.name ?? null;
+  const current = (sel && (sel === "good" || learned.some((e) => e.name === sel)) ? sel : null) ?? learned.at(-1)?.name ?? null;
   const [ep, setEp] = useState<Episode | null>(null);
   useEffect(() => {
     if (!current) return;
@@ -907,6 +945,10 @@ function Episodes({ data }: { data: RunData }) {
   }, [current, data.algo, env]);
   return (
     <div>
+      <div className="mb-2 flex items-center gap-2">
+        <ModeSwitch mode={mode} setMode={setMode} />
+        {mode === "training" && !hasTraining && <span className="text-[11px] text-neutral-400">this run has no training episodes recorded: re-run it to get them</span>}
+      </div>
       <div className="mb-3 flex flex-wrap items-center gap-1.5">
         {learned.length > MANY && (
           <select
@@ -1053,6 +1095,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
   const [pick, setPick] = useState<IterPick>("final");
   // match the two sides by environment steps (the same experience) or by iteration number
   const [match, setMatch] = useState<"steps" | "iter">("steps");
+  const [mode, setMode] = useState<Mode>("greedy");
   const [stepPick, setStepPick] = useState<IterPick>("final");
   const [lists, setLists] = useState<Record<string, EpisodeInfo[]>>({});
   const [eps, setEps] = useState<Record<string, Episode>>({});
@@ -1085,7 +1128,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
     };
   }, [srcL, srcR, verL, verR, lists, env]);
 
-  const learned = (s: Side) => (s === "good" ? [] : (lists[ver(s)] ?? []).filter((e) => e.name !== "good"));
+  const learned = (s: Side) => (s === "good" ? [] : (lists[ver(s)] ?? []).filter((e) => ofKind(e, mode)));
   const stepMaps = useMemo(
     () => Object.fromEntries(algos.map((a) => [a.algo, new Map(a.speed.map((pt) => [pt.iter, pt.env_steps]))])) as Partial<Record<AlgoKey, Map<number, number>>>,
     [algos],
@@ -1144,7 +1187,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
     const isFinal = learned(s).at(-1)?.name === info.name && !isLive(by[s]?.status);
     return {
       label: LADDER_BY[s].tab,
-      sub: `${isFinal ? "final, " : ""}iteration ${info.iter}${steps != null ? ` · trained on ${num(steps)} env steps` : ""}`,
+      sub: `${mode === "training" ? "training episode (own start), " : isFinal ? "final, " : ""}iteration ${info.iter}${steps != null ? ` · trained on ${num(steps)} env steps` : ""}`,
       color: LADDER_BY[s].color,
       ep,
     };
@@ -1155,7 +1198,9 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
     info === null && s !== "good"
       ? match === "iter"
         ? `${LADDER_BY[s].tab}: no episode recorded at iteration ${pick} (its run has ${learned(s).at(-1)?.iter ?? 0} iterations)`
-        : `${LADDER_BY[s].tab}: no recorded episode yet`
+        : mode === "training"
+          ? `${LADDER_BY[s].tab}: no training episodes recorded in this run (re-run it to get them)`
+          : `${LADDER_BY[s].tab}: no recorded episode yet`
       : null;
 
   // environment-step marks: about 10 even points up to the longer run, the nearest 1/2/5 × 10ⁿ apart
@@ -1185,13 +1230,14 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
 
   return (
     <Panel
-      title="Side by side: two policies, same start"
-      help="Every recorded episode starts from the same state and always takes the most likely action, so two policies can be compared directly. Pick what goes left and right. Same env steps: each side plays its recording closest to the same amount of experience (fair between algorithms, whose iterations differ: a PPO iteration is 2,048 steps, a collapsed run's iteration can be 40). Same iteration: the same iteration number on both sides. Each side shows its iteration and how many environment steps it had trained on."
+      title={mode === "greedy" ? "Side by side: two policies, same start" : "Side by side: two policies, real training episodes"}
+      help="Most likely action: every recording starts from the same state and always takes the most likely action, so two policies can be compared directly. As in training: a real episode from that iteration's batch, with the actions as they were sampled (so sometimes not the most likely one: that is exploration); each starts where that episode started. Pick what goes left and right. Same env steps: each side plays its recording closest to the same amount of experience (fair between algorithms, whose iterations differ: a PPO iteration is 2,048 steps, a collapsed run's iteration can be 40). Same iteration: the same iteration number on both sides. Each side shows its iteration and how many environment steps it had trained on."
     >
       <div className="mb-3 flex flex-wrap items-center gap-2 text-[12px]">
         {select(left, setLeft)}
         <span className="text-neutral-400">vs</span>
         {select(right, setRight)}
+        <ModeSwitch mode={mode} setMode={setMode} />
         <span className="ml-3 flex rounded bg-neutral-100 p-0.5 text-[11px]">
           {(
             [
