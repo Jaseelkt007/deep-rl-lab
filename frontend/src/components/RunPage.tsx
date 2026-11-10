@@ -192,7 +192,7 @@ interface Trace {
   dash?: number[];
 }
 export interface EnvCfg {
-  key: "cartpole" | "double_cartpole" | "double_cartpole_joint" | "mountaincar";
+  key: "cartpole" | "double_cartpole" | "double_cartpole_joint" | "mountaincar" | "mountaincar_energy";
   envId: EnvId;
   title: string;
   tab: string;
@@ -357,6 +357,43 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
       { name: "height on the hill", unit: "", range: "0 … 1", scale: 1, derived: (s) => 0.45 * Math.sin(3 * s[0]) + 0.55 },
     ],
     reward: "−1 per step until the flag",
+    ends: "terminated: position ≥ 0.5 (the flag) · truncated: 200 steps",
+    goodPolicy: "push in the direction you are moving (v ≥ 0 → right, else left)",
+    goodAction: (s) => (s[1] >= 0 ? 2 : 0),
+    traces: [
+      { label: "position", f: (s) => (s[0] + 0.3) / 0.9, color: C.ink },
+      { label: "velocity", f: (s) => s[1] / 0.07, color: C.critic },
+    ],
+    traceNote: "position as the network sees it (the flag is at 0.89) and velocity / 0.07",
+    endText: (_s, n) => `reached the flag after ${n} steps`,
+    status: (s) => `x ${s[0].toFixed(3)} · v ${s[1] >= 0 ? "+" : ""}${s[1].toFixed(4)}`,
+    angleColumn: "",
+    success: "flag",
+    lengthMax: 200,
+    label: {
+      length: "steps to the flag (200 = never)",
+      speed: "speed: steps until every eval start reaches the flag",
+      firstGood: "first batch where all reach the flag",
+      stays: "stability: stays solved",
+      quality: (n: number) => `reaches the flag within ${n} steps`,
+      median: "median steps to the flag",
+      curve: "Quality: share of the 20 starts that have reached the flag by step t (final policy)",
+    },
+  },
+  mountaincar_energy: {
+    key: "mountaincar_energy",
+    envId: "MountainCar-v0",
+    title: "MountainCar + energy bonus",
+    tab: "MountainCar · energy",
+    href: "/mountaincar-energy",
+    command: (algo) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --env mountaincar_energy --algo ${algo}`,
+    actions: ["left", "none", "right"],
+    state: [
+      { name: "position x", unit: "", range: "−1.2 … 0.6 (flag at 0.5)", scale: 0.9, offset: -0.3 },
+      { name: "velocity v", unit: "", range: "±0.07", scale: 0.07 },
+      { name: "height on the hill", unit: "", range: "0 … 1", scale: 1, derived: (s) => 0.45 * Math.sin(3 * s[0]) + 0.55 },
+    ],
+    reward: "−1 per step + 10·(γΦ(s′) − Φ(s)), Φ = energy (height + speed²) scaled to 0…1; training only, the scorecard uses the official −1",
     ends: "terminated: position ≥ 0.5 (the flag) · truncated: 200 steps",
     goodPolicy: "push in the direction you are moving (v ≥ 0 → right, else left)",
     goodAction: (s) => (s[1] >= 0 ? 2 : 0),
@@ -1502,6 +1539,15 @@ function AlgoDetail({ data }: { data: RunData }) {
               { key: "eval", label: "eval", color: C.pos },
             ]}
           />
+          {env.success === "flag" && (
+            <Chart
+              title="Agent: how far right does it get?"
+              help="The highest position each episode (or episode piece, for PPO) reached, averaged over the batch. The flag is at x = 0.5; random pushes reach about −0.37. It shows progress before any episode reaches the flag."
+              rows={rows}
+              series={[{ key: "max_x", label: "highest x", color: C.ink }]}
+              range={[-1.2, 0.6]}
+            />
+          )}
           <Chart
             title="Actor: is the policy right?"
             help={`P(good action): probability given to the good policy's action (${env.goodPolicy}); ${(1 / env.actions.length).toFixed(2)} = random, 1 = perfect. Agreement: how often the most likely action is the good one. Entropy: ${Math.log(env.actions.length).toFixed(2)} = all actions equally likely, 0 = always the same action.`}
