@@ -104,6 +104,10 @@ uv run python scripts/train_cartpole.py --env double_cartpole --algo ppo      # 
 ```
 Runs are saved in `runs/double_cartpole/<algo>/` and shown on **http://localhost:3000/double** (same panels as the CartPole page).
 
+**The joint rule** (`--env double_cartpole_joint`, page **/double-joint**): with the rule above, most episodes ended because the top stick passed 15° from vertical while still almost in line with the lower stick (both leaning together). The joint rule lets the lower stick lean up to **30°**, and the top stick fails only when **bent more than 20° away from the lower stick**. The hand-written controller balances this too (100/100 starts, 20/20 for 10,000 steps; `check_double_cartpole.py --rule joint`).
+
+Watch the setup: `uv run python scripts/play_double_cartpole.py` (`--policy random`, `--policy none`, `--rule joint`, `--fps 10 --print-every 1`).
+
 ## Other scripts
 
 ```bash
