@@ -761,7 +761,20 @@ function Episodes({ data }: { data: RunData }) {
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-1.5">
-        {learned.map((e) => {
+        {learned.length > MANY && (
+          <select
+            className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-[12px] tabular-nums"
+            value={current ?? ""}
+            onChange={(e) => setSel(e.target.value)}
+          >
+            {learned.map((e) => (
+              <option key={e.name} value={e.name}>
+                {e.iter === finalIter ? "final " : ""}iteration {e.iter}: {e.steps} steps
+              </option>
+            ))}
+          </select>
+        )}
+        {(learned.length > MANY ? [] : learned).map((e) => {
           const isFinal = e.iter === finalIter;
           return (
             <button
@@ -787,6 +800,9 @@ function Episodes({ data }: { data: RunData }) {
     </div>
   );
 }
+
+/** More recorded episodes than this: a dropdown instead of one button each. */
+const MANY = 24;
 
 // ------------------------------------------------------------------ side by side
 type Side = AlgoKey | "good";
@@ -980,7 +996,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
         <span className="text-neutral-400">vs</span>
         {select(right, setRight)}
         <span className="ml-3 text-neutral-500">iteration</span>
-        {(["final", ...iters] as IterPick[]).map((it) => (
+        {(["final", ...(iters.length > MANY ? [] : iters)] as IterPick[]).map((it) => (
           <button
             key={it}
             onClick={() => setPick(it)}
@@ -989,6 +1005,20 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
             {it}
           </button>
         ))}
+        {iters.length > MANY && (
+          <select
+            className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 tabular-nums"
+            value={pick === "final" ? "" : pick}
+            onChange={(e) => setPick(e.target.value === "" ? "final" : +e.target.value)}
+          >
+            <option value="">pick an iteration…</option>
+            {iters.map((it) => (
+              <option key={it} value={it}>
+                iteration {it}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
       {missing(left, infoL) || missing(right, infoR) ? (
         <div className="py-8 text-center text-[12px] text-neutral-500">
