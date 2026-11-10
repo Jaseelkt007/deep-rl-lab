@@ -87,6 +87,23 @@ Things worth knowing, all visible on the page:
 - **The actor loss ≈ |A| × entropy.** Its value is not a quality measure. Judge the actor by P(good action) and the episode length.
 - **The reward is +1 per step and nothing else.** Every policy that survives 500 steps scores the same: staying centered is not rewarded. Once almost every episode reaches 500 there is little signal left, and the policy can drift while still scoring 500.
 
+## Double cart-pole
+
+A second environment, `backend/rl/double_cartpole.py`: the cart carries **two sticks joined by a free hinge** (no motor at the joint), so the agent must keep both straight up by moving only the cart.
+
+- **State (6 numbers):** cart position and velocity, the lower stick's angle and angular velocity, and the **angle between the sticks** with its rate. The top stick's angle from vertical is the sum of the two angles.
+- **Actions:** push ±10 N (two actions, as in CartPole).
+- **Reward:** +1 per step (an "upright" variant pays 1 when both sticks are straight, 0 at the limit).
+- **Ends:** the cart leaves the track, or either stick leans more than 15° from vertical; 500 steps at most. Starts almost straight (all 6 numbers within ±0.05).
+- **Physics:** Lagrange's equations for a cart with two uniform rods, RK4. Tested: energy stays constant without a push, small angles match the linear model.
+- **Can it be balanced with two pushes?** `uv run python scripts/check_double_cartpole.py`: a hand-written controller (LQR) balanced 100/100 random starts for 500 steps and 20/20 for 10,000 steps with ±10 N only. It is the "good policy" on this page.
+
+```bash
+cd backend
+uv run python scripts/train_cartpole.py --env double_cartpole --algo ppo      # or batch_ac, epochs, ratio, clip, gae
+```
+Runs are saved in `runs/double_cartpole/<algo>/` and shown on **http://localhost:3000/double** (same panels as the CartPole page).
+
 ## Other scripts
 
 ```bash
@@ -114,10 +131,11 @@ backend/
   rl/actor_critic.py    one-step actor-critic (used by the experiments)
   rl/trainer.py, envs.py, networks.py, config.py, diagnostics.py, logger.py
   rl/ppo.py             the ladder from batch actor-critic to PPO (epochs, clip, GAE, minibatches)
+  rl/double_cartpole.py the double cart-pole environment and its LQR controller
   server.py             FastAPI: terminal runs (/api/cli/algos, /api/cli/run/{algo}), Learn page API, older run API
   scripts/              train_cartpole.py, play_cartpole.py, check_cartpole.py, experiments.py, run_batch.py
   tests/                pytest
-frontend/               Next.js: / (Run), /learn (one update, step by step), /compare
+frontend/               Next.js: / (Run, CartPole), /double (Run, double cart-pole), /learn (one update, step by step), /compare
 docs/experiments/       pre-registered experiments and their results
 runs/                   saved runs (git-ignored); runs/cli/<algo>/ = the latest terminal run of each algorithm
 ```
