@@ -112,15 +112,17 @@ def make_session(algo: str, args):
     if algo == "batch_ac":
         cfg = LearnConfig(env_id=SPEC.env_id, seed=args.seed, batch_episodes=pick(args.batch, 5),
                           hidden=pick(args.hidden, 8), actor_lr=pick(args.actor_lr, 0.01),
-                          critic_lr=pick(args.critic_lr, 0.03), gamma=args.gamma, optimizer=args.optimizer)
+                          critic_lr=pick(args.critic_lr, 0.03), gamma=args.gamma, optimizer=args.optimizer,
+                          shaping=SPEC.shaping)
         return ExplainSession(cfg), cfg.model_dump()
     base = {**PPOConfig().model_dump(), **VARIANTS[algo]}
-    cfg = PPOConfig(**{**base, "env_id": SPEC.env_id, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, base["hidden"]),
+    cfg = PPOConfig(**{**base, "env_id": SPEC.env_id, "shaping": SPEC.shaping, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, base["hidden"]),
                        "actor_lr": pick(args.actor_lr, base["actor_lr"]), "critic_lr": pick(args.critic_lr, base["critic_lr"]),
                        **({"batch_episodes": args.batch} if args.batch is not None and base["batch_episodes"] else {})})
     return PPOSession(cfg), cfg.model_dump()
 from rl.logger import runs_dir  # noqa: E402
 from rl.double_cartpole import from_obs, reference_controller  # noqa: E402
+from rl.envs import potential  # noqa: E402
 
 
 class EnvSpec:
@@ -130,16 +132,20 @@ class EnvSpec:
         self.key = key
         # CartPole-like: success = still balancing at the time limit, longer is better.
         # MountainCar: success = reaching the flag (the episode TERMINATES), shorter is better.
-        self.success_is_terminal = key == "mountaincar"
-        self.n_actions = 3 if key == "mountaincar" else 2
-        self.quality_steps = 200 if key == "mountaincar" else 10_000  # default length of the final test
+        mc = key.startswith("mountaincar")
+        self.success_is_terminal = mc
+        self.n_actions = 3 if mc else 2
+        self.quality_steps = 200 if mc else 10_000  # default length of the final test
+        # reward shaping used in TRAINING only; evaluation and the scorecard use the official reward
+        self.shaping = "energy" if key == "mountaincar_energy" else "none"
         if key == "cartpole":
             self.env_id, self.title, self.folder = "CartPole-v1", "CartPole", "cli"
             self.reference_text = "angle + 0.5·ang_vel > 0 → right"
             self.reference = lambda s: 1 if s[2] + 0.5 * s[3] > 0 else 0
             self.angles = lambda s: abs(float(s[2]))  # for the quality test: mean |pole angle|
-        elif key == "mountaincar":
-            self.env_id, self.title, self.folder = "MountainCar-v0", "MountainCar", "mountaincar"
+        elif mc:
+            self.env_id, self.folder = "MountainCar-v0", key
+            self.title = "MountainCar + energy bonus" if self.shaping == "energy" else "MountainCar"
             self.reference_text = "push in the direction you are moving"
             self.reference = lambda s: 2 if s[1] >= 0 else 0  # 0 = left, 1 = no push, 2 = right
             self.angles = lambda s: 0.0
@@ -174,7 +180,7 @@ class EnvSpec:
 
     def set_state(self, env, st) -> None:
         """Put an unwrapped env exactly into the observed state `st`."""
-        if self.key in ("cartpole", "mountaincar"):
+        if self.key == "cartpole" or self.key.startswith("mountaincar"):
             env.state = np.array(st, dtype=np.float64)
         else:
             env.q, env.qd = from_obs(np.asarray(st))
@@ -328,7 +334,11 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
             obs, ret, disc = np.array(st), 0.0, 1.0
             for _ in range(horizon):
                 p = F.softmax(session.actor(torch.as_tensor(session.encoder(obs, 0))), -1)
+                prev = obs
                 obs, rew, term, _, _ = env.step(int(torch.multinomial(p, 1, generator=gen)))
+                if SPEC.shaping != "none":  # the same bonus the critic was trained with
+                    rew += 10.0 * (g * (0.0 if term else potential(obs, SPEC.env_id, SPEC.shaping))
+                                   - potential(prev, SPEC.env_id, SPEC.shaping))
                 ret += disc * rew
                 disc *= g
                 if term:
@@ -341,16 +351,18 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
 
 
 def web_page() -> str:
-    return "http://localhost:3000" + {"cartpole": "", "double_cartpole": "/double", "mountaincar": "/mountaincar"}.get(
-        SPEC.key, "/double-joint")
+    return "http://localhost:3000" + {"cartpole": "", "double_cartpole": "/double", "mountaincar": "/mountaincar",
+                                      "mountaincar_energy": "/mountaincar-energy"}.get(SPEC.key, "/double-joint")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--env", choices=["cartpole", "double_cartpole", "double_cartpole_joint", "mountaincar"], default="cartpole",
+    ap.add_argument("--env", choices=["cartpole", "double_cartpole", "double_cartpole_joint", "mountaincar", "mountaincar_energy"],
+                    default="cartpole",
                     help="cartpole (one stick), double_cartpole (two sticks on a free hinge, each ≤ 15° from "
                          "vertical), double_cartpole_joint (lower stick ≤ 30°, top stick bent ≤ 20° from it) "
-                         "or mountaincar (official MountainCar-v0: −1 per step, 200-step limit)")
+                         "mountaincar (official MountainCar-v0: −1 per step, 200-step limit) or mountaincar_energy "
+                         "(+ a bonus for gaining energy in training: 10·(γΦ(s′) − Φ(s)))")
     ap.add_argument("--algo", choices=[*ALGOS, "all"], default="batch_ac",
                     help="batch_ac | epochs | ratio | clip | gae | ppo, or all of them one after another")
     ap.add_argument("--budget", type=int, default=200_000, help="environment steps to train for (the same for every algorithm)")
@@ -411,7 +423,7 @@ def train(algo: str, args) -> None:
     un_len, un_ok = evaluate(lambda s: greedy_action(session, s))
     print(f"untrained policy: eval {un_len:.0f}, succeeds {un_ok:.0%}\n")
     cols = ["iter", "ret", "env_steps", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "clip_frac", "agree", "p_good",
-            "ce_good", "dir", "eval", "success", "eval_success", "true_err", "noise", "V_mean", "Vtrue_mean"]
+            "ce_good", "dir", "eval", "success", "eval_success", "max_x", "true_err", "noise", "V_mean", "Vtrue_mean"]
     print(f"{'iter':>4} {'ret':>6} {'Lv (before → after)':>22} {'rel':>5} {'corr':>5} {'Lpi':>8} {'H':>5} {'EV':>6} "
           f"{'|A|':>6} {'KL':>8} {'agree':>6} {'p_good':>6} {'ce_good':>7} {'dir':>5} {'eval':>5}")
 
@@ -475,6 +487,9 @@ def train(algo: str, args) -> None:
                    "rel": rel, "corr": corr, "Lpi": s["actor_loss"], "H": s["entropy"], "EV": ev,
                    "absA": s["mean_abs_adv"], "KL": kl, "clip_frac": clip_frac, "agree": agree, "p_good": p_good, "ce_good": ce_good,
                    "dir": direction, "eval": None, "success": success, "eval_success": None,
+                   # MountainCar: the highest position each episode (piece) reached, averaged; the flag is at 0.5
+                   "max_x": (float(np.mean([max(st[0] for st in ep["states"]) for ep in tr["episodes"] if ep["states"]]))
+                             if SPEC.success_is_terminal else None),
                    "true_err": None, "noise": None, "V_mean": None, "Vtrue_mean": None}
             if it % args.eval_every == 0 or it == 1 or last:
                 row["eval"], row["eval_success"] = evaluate(lambda st: greedy_action(session, st))

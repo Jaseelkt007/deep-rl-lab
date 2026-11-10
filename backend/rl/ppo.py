@@ -54,6 +54,7 @@ class PPOConfig(BaseModel):
     batch_episodes: int | None = Field(5, ge=1)  # a batch = N complete episodes ...
     batch_steps: int | None = Field(None, ge=1)  # ... or exactly N steps (cut episodes continue)
     adv_norm: bool = False  # normalise A to mean 0, std 1 per minibatch
+    shaping: Literal["none", "energy"] = "none"  # MountainCar: + 10·(γΦ(s′) − Φ(s)), Φ = energy (rl/envs.py)
 
 
 # The ladder from our batch actor-critic to PPO: each rung adds one thing to the one before.
@@ -106,7 +107,7 @@ class PPOSession:
         torch.set_num_threads(1)
         torch.manual_seed(cfg.seed)
         self.cfg = cfg
-        run_cfg = RunConfig(env_id=cfg.env_id, gamma=cfg.gamma, seed=cfg.seed)
+        run_cfg = RunConfig(env_id=cfg.env_id, gamma=cfg.gamma, seed=cfg.seed, shaping=cfg.shaping)
         self.env = make_env(run_cfg)
         self.encoder = ObsEncoder(run_cfg)
         n_actions = int(self.env.action_space.n)
