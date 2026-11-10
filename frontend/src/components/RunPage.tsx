@@ -930,6 +930,9 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
   const [leftPick, setLeft] = useState<Side | null>(null);
   const [rightPick, setRight] = useState<Side | null>(null);
   const [pick, setPick] = useState<IterPick>("final");
+  // match the two sides by environment steps (the same experience) or by iteration number
+  const [match, setMatch] = useState<"steps" | "iter">("steps");
+  const [stepPick, setStepPick] = useState<IterPick>("final");
   const [lists, setLists] = useState<Record<string, EpisodeInfo[]>>({});
   const [eps, setEps] = useState<Record<string, Episode>>({});
 
@@ -962,12 +965,27 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
   }, [srcL, srcR, verL, verR, lists, env]);
 
   const learned = (s: Side) => (s === "good" ? [] : (lists[ver(s)] ?? []).filter((e) => e.name !== "good"));
+  const stepMaps = useMemo(
+    () => Object.fromEntries(algos.map((a) => [a.algo, new Map(a.speed.map((pt) => [pt.iter, pt.env_steps]))])) as Partial<Record<AlgoKey, Map<number, number>>>,
+    [algos],
+  );
+  const stepsAt = (s: AlgoKey, it: number) => stepMaps[s]?.get(it);
   const resolve = (s: Side): EpisodeInfo | null | undefined => {
     const list = lists[ver(source(s))];
     if (!list) return undefined; // still loading
     if (s === "good") return list.find((e) => e.name === "good") ?? null;
     const l = learned(s);
-    return pick === "final" ? (l.at(-1) ?? null) : (l.find((e) => e.iter === pick) ?? null);
+    const which = match === "steps" ? stepPick : pick;
+    if (which === "final") return l.at(-1) ?? null;
+    if (match === "iter") return l.find((e) => e.iter === pick) ?? null;
+    // the recording closest to the same number of environment steps
+    let best: EpisodeInfo | null = null;
+    for (const e of l) {
+      const st = stepsAt(s, e.iter);
+      if (st == null) continue;
+      if (!best || Math.abs(st - which) < Math.abs((stepsAt(s, best.iter) ?? Infinity) - which)) best = e;
+    }
+    return best;
   };
   const infoL = resolve(left);
   const infoR = resolve(right);
@@ -1013,7 +1031,25 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
   const epL = eps[keyL];
   const epR = eps[keyR];
   const missing = (s: Side, info: EpisodeInfo | null | undefined) =>
-    info === null && s !== "good" ? `${LADDER_BY[s].tab}: no episode recorded at iteration ${pick} (its run has ${learned(s).at(-1)?.iter ?? 0} iterations)` : null;
+    info === null && s !== "good"
+      ? match === "iter"
+        ? `${LADDER_BY[s].tab}: no episode recorded at iteration ${pick} (its run has ${learned(s).at(-1)?.iter ?? 0} iterations)`
+        : `${LADDER_BY[s].tab}: no recorded episode yet`
+      : null;
+
+  // environment-step marks: about 10 even points up to the longer run, the nearest 1/2/5 × 10ⁿ apart
+  const lastSteps = [left, right]
+    .filter((s): s is AlgoKey => s !== "good")
+    .map((s) => {
+      const last = learned(s).at(-1);
+      return last ? (stepsAt(s, last.iter) ?? 0) : 0;
+    });
+  const maxSteps = Math.max(0, ...lastSteps);
+  const raw = maxSteps / 10;
+  const mag = raw > 0 ? 10 ** Math.floor(Math.log10(raw)) : 1;
+  const unit = [1, 2, 5, 10].map((m) => m * mag).reduce((u, v) => (Math.abs(Math.log(v / raw)) < Math.abs(Math.log(u / raw)) ? v : u));
+  const marks = raw > 0 ? Array.from({ length: Math.floor(maxSteps / unit) }, (_, k) => (k + 1) * unit) : [];
+  const kfmt = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(1)}k` : String(v));
 
   const select = (value: Side, set: (s: Side) => void) => (
     <select className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-[12px]" value={value} onChange={(e) => set(e.target.value as Side)}>
@@ -1029,14 +1065,36 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
   return (
     <Panel
       title="Side by side: two policies, same start"
-      help="Every recorded episode starts from the same state and always takes the most likely action, so two policies can be compared directly. Pick what goes left and right, and the iteration (the same for both). Careful: one iteration is not the same amount of experience in every algorithm (a PPO iteration is 2,048 steps), so each side also shows how many environment steps it had trained on."
+      help="Every recorded episode starts from the same state and always takes the most likely action, so two policies can be compared directly. Pick what goes left and right. Same env steps: each side plays its recording closest to the same amount of experience (fair between algorithms, whose iterations differ: a PPO iteration is 2,048 steps, a collapsed run's iteration can be 40). Same iteration: the same iteration number on both sides. Each side shows its iteration and how many environment steps it had trained on."
     >
       <div className="mb-3 flex flex-wrap items-center gap-2 text-[12px]">
         {select(left, setLeft)}
         <span className="text-neutral-400">vs</span>
         {select(right, setRight)}
-        <span className="ml-3 text-neutral-500">iteration</span>
-        {(["final", ...(iters.length > MANY ? [] : iters)] as IterPick[]).map((it) => (
+        <span className="ml-3 flex rounded bg-neutral-100 p-0.5 text-[11px]">
+          {(
+            [
+              ["steps", "same env steps"],
+              ["iter", "same iteration"],
+            ] as const
+          ).map(([k, label]) => (
+            <button key={k} onClick={() => setMatch(k)} className={`rounded px-1.5 ${match === k ? "bg-white shadow-sm" : "text-neutral-500"}`}>
+              {label}
+            </button>
+          ))}
+        </span>
+        {match === "steps" &&
+          (["final", 0, ...marks] as IterPick[]).map((v) => (
+            <button
+              key={v}
+              onClick={() => setStepPick(v)}
+              className={`rounded border px-2 py-0.5 tabular-nums ${stepPick === v ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300 bg-white"}`}
+            >
+              {v === "final" ? "final" : v === 0 ? "start" : kfmt(v)}
+            </button>
+          ))}
+        {match === "iter" && <span className="text-neutral-500">iteration</span>}
+        {(match === "iter" ? (["final", ...(iters.length > MANY ? [] : iters)] as IterPick[]) : []).map((it) => (
           <button
             key={it}
             onClick={() => setPick(it)}
@@ -1045,7 +1103,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
             {it}
           </button>
         ))}
-        {iters.length > MANY && (
+        {match === "iter" && iters.length > MANY && (
           <select
             className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 tabular-nums"
             value={pick === "final" ? "" : pick}
