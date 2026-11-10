@@ -247,10 +247,30 @@ def record_episode(session: ExplainSession | None, it: int, folder: Path, name: 
             break
     env.close()
     name = name or f"iter{it:04d}"
-    info = {"name": name, "iter": it, "steps": len(actions), "terminated": bool(term)}
+    info = {"name": name, "iter": it, "steps": len(actions), "terminated": bool(term),
+            "kind": "good" if session is None else "greedy"}
     (folder / f"{name}.json").write_text(json.dumps({**info, "states": states, "actions": actions, "probs": probs, "good_actions": good_actions,
                                                     "final_state": np.asarray(obs, dtype=float).tolist()}))
     frames[0].save(folder / f"{name}.gif", save_all=True, append_images=frames[1:], duration=40, loop=0)
+    return info
+
+
+def record_training_episode(tr: dict, it: int, folder: Path) -> dict | None:
+    """Save one REAL training episode of this batch: the actions as they were sampled from π (not the most
+    likely ones), with the probabilities at that moment. It starts wherever that episode started."""
+    eps = tr["episodes"]
+    whole = [e for e in eps if e.get("fresh", True) and e.get("end", "terminated" if e.get("terminated") else "truncated") != "cut"
+             and e.get("actions")]
+    ep = whole[0] if whole else max((e for e in eps if e.get("actions")), key=lambda e: len(e["actions"]), default=None)
+    if ep is None:
+        return None
+    terminated = bool(ep["terminated"]) if "terminated" in ep else ep.get("end") == "terminated"
+    states = ep["states"]
+    info = {"name": f"train{it:04d}", "iter": it, "steps": len(ep["actions"]), "terminated": terminated, "kind": "training",
+            "complete": bool(whole)}
+    (folder / f"{info['name']}.json").write_text(json.dumps({
+        **info, "states": states, "actions": [int(a) for a in ep["actions"]], "probs": ep["probs"],
+        "good_actions": [reference_action(np.asarray(s)) for s in states]}))
     return info
 
 
@@ -532,6 +552,7 @@ def train(algo: str, args) -> None:
 
             if it == 1 or it % args.record_every == 0 or last:
                 ep = record_episode(session, it, out_dir / "episodes")
+                record_training_episode(tr, it, out_dir / "episodes")
                 print(f"     ↳ recorded the current policy playing: {ep['steps']} steps (episodes/{ep['name']}.gif)")
             if args.render_every and it % args.render_every == 0:  # independent of --record-every
                 print(f"     ↳ showing the current policy in a window (iteration {it}) …")

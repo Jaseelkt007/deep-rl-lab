@@ -392,7 +392,7 @@ def learn_trace(sid: str, k: int) -> dict:
 # Terminal runs: the latest run of each algorithm, saved by scripts/train_cartpole.py in
 # runs/cli/<algo>/ (batch_ac, epochs, clip, gae, ppo)
 # ----------------------------------------------------------------------------
-CLI_NAME_RE = re.compile(r"^(iter\d{4}|good)$")
+CLI_NAME_RE = re.compile(r"^(iter\d{4}|train\d{4}|good)$")  # greedy recordings, training episodes, good policy
 CLI_ALGO_RE = re.compile(r"^[a-z_]+$")
 
 
@@ -483,7 +483,8 @@ def _cli_episodes(d) -> list[dict]:
     out = []
     for p in sorted((d / "episodes").glob("*.json")):
         ep = json.loads(p.read_text())
-        out.append({k: ep[k] for k in ("name", "iter", "steps", "terminated")})
+        kind = ep.get("kind") or ("good" if ep["name"] == "good" else "greedy")  # older runs: no kind
+        out.append({**{k: ep[k] for k in ("name", "iter", "steps", "terminated")}, "kind": kind})
     return out
 
 

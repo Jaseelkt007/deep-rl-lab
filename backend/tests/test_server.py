@@ -117,7 +117,8 @@ def test_cli_endpoints(client, tmp_path):
     assert r["rows"][0]["env_steps"] == 2048.0 and r["episodes"][0]["steps"] == 3
     assert len(r["per_epoch"]) == 4 and r["per_epoch"][3]["r_max"] == 2.0
     assert client.get("/api/cli/run/ppo/episode/iter0001").json()["actions"] == [0, 1, 0]
-    assert client.get("/api/cli/run/ppo/episodes").json() == [{"name": "iter0001", "iter": 1, "steps": 3, "terminated": True}]
+    assert client.get("/api/cli/run/ppo/episodes").json() == [{"name": "iter0001", "iter": 1, "steps": 3, "terminated": True,
+                                                                 "kind": "greedy"}]
     assert client.get("/api/cli/run/ppo/episode/..%2Fsettings").status_code == 404
     assert client.get("/api/cli/run/nope").status_code == 404
 

@@ -129,7 +129,9 @@ class PPOSession:
         """Play with the frozen policy. Returns per-step arrays and the episode segments."""
         cfg = self.cfg
         X, acts, logp_old, rews, ends, next_obs = [], [], [], [], [], []
-        segments, seg = [], {"states": []}
+        # a segment = one episode's steps inside this batch; `fresh`: it started with a reset (not cut off
+        # from the previous batch), `end`: how it ended (terminated / truncated / cut)
+        segments, seg = [], {"states": [], "actions": [], "probs": [], "fresh": self.ep_len == 0}
         finished_lengths, finished_terminated = [], []
         n_done_episodes = 0
         while True:
@@ -142,6 +144,8 @@ class PPOSession:
             logp_old.append(float(torch.log(p[a])))
             rews.append(float(r))
             seg["states"].append(np.asarray(self.obs, dtype=float).tolist())
+            seg["actions"].append(a)
+            seg["probs"].append(p.tolist())
             next_obs.append(np.asarray(obs2, dtype=float))
             self.ep_len += 1
             end = "terminated" if term else "truncated" if trunc else None
@@ -159,8 +163,9 @@ class PPOSession:
                 end = "cut"  # the episode continues in the next batch; its future is filled in with V
             ends.append(end)
             if end:
+                seg["end"] = end
                 segments.append(seg)
-                seg = {"states": []}
+                seg = {"states": [], "actions": [], "probs": [], "fresh": True}
             if full:
                 break
         self._finished_terminated = finished_terminated
