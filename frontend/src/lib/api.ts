@@ -1,6 +1,17 @@
 import type { RunConfig, RunDetail, RunMeta, StepRec, Status } from "./types";
 
 export const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+
+/** The hosted site (Vercel) has no backend: the terminal runs are read from static JSON in
+ *  public/data, written by backend/scripts/export_site_data.py. Pages that need the live
+ *  backend (Learn, Compare) are hidden there. */
+export const STATIC = process.env.NEXT_PUBLIC_STATIC === "1";
+
+/** URL of a terminal-run API call: `/api/cli/<path>?env=…` locally, `/data/<env>/<path>.json` on the hosted site. */
+export function cliUrl(path: string, env: string): string {
+  if (STATIC) return `/data/${env}/${path}.json`;
+  return `${BACKEND}/api/cli/${path}${env === "cartpole" ? "" : `?env=${env}`}`;
+}
 export const WS_URL = BACKEND.replace(/^http/, "ws") + "/ws";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {

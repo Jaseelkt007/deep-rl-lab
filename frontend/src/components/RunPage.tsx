@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
-import { BACKEND } from "@/lib/api";
+import { STATIC, cliUrl } from "@/lib/api";
 import { ACTION_COLORS, ACTION_GLYPH, C } from "@/lib/colors";
 import { fmt } from "@/lib/math";
 import type { EnvId, StepRec } from "@/lib/types";
@@ -442,8 +442,6 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
 };
 const EnvCtx = createContext<EnvCfg>(ENVS.cartpole);
 const useEnv = () => useContext(EnvCtx);
-/** ?env=… for every API call on the double cart-pole page; CartPole keeps the default. */
-const q = (env: EnvCfg) => (env.key === "cartpole" ? "" : `?env=${env.key}`);
 
 // ------------------------------------------------------------------ helpers
 const num = (v: number | null | undefined) => (v == null ? "never" : Math.round(v).toLocaleString());
@@ -869,8 +867,8 @@ function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
           </div>
         )}
         <Controls pb={pb}>
-          {ep.kind !== "training" && (
-            <a className="text-[#2a78d6] hover:underline" href={`${BACKEND}/api/cli/run/${algo}/gif/${ep.name}${q(env)}`} target="_blank" rel="noreferrer">
+          {ep.kind !== "training" && !STATIC && (
+            <a className="text-[#2a78d6] hover:underline" href={cliUrl(`run/${algo}/gif/${ep.name}`, env.key)} target="_blank" rel="noreferrer">
               GIF
             </a>
           )}
@@ -935,7 +933,7 @@ function Episodes({ data }: { data: RunData }) {
   useEffect(() => {
     if (!current) return;
     let alive = true;
-    fetch(`${BACKEND}/api/cli/run/${data.algo}/episode/${current}${q(env)}`)
+    fetch(cliUrl(`run/${data.algo}/episode/${current}`, env.key))
       .then((r) => r.json())
       .then((e: Episode) => alive && setEp(e))
       .catch(() => {});
@@ -1118,7 +1116,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
       [srcR, verR],
     ] as const) {
       if (!k || lists[v]) continue;
-      fetch(`${BACKEND}/api/cli/run/${k}/episodes${q(env)}`)
+      fetch(cliUrl(`run/${k}/episodes`, env.key))
         .then((r) => (r.ok ? r.json() : null))
         .then((d: EpisodeInfo[] | null) => alive && d && setLists((prev) => ({ ...prev, [v]: d })))
         .catch(() => {});
@@ -1164,7 +1162,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
       [keyR, srcR, infoR],
     ] as const) {
       if (!k || !src || !info || eps[k]) continue;
-      fetch(`${BACKEND}/api/cli/run/${src}/episode/${info.name}${q(env)}`)
+      fetch(cliUrl(`run/${src}/episode/${info.name}`, env.key))
         .then((r) => (r.ok ? r.json() : null))
         .then((e: Episode | null) => alive && e && setEps((prev) => ({ ...prev, [k]: e })))
         .catch(() => {});
@@ -1380,7 +1378,7 @@ function UpdatePanel({ c }: { c: AlgoConfig }) {
       <Kv k="networks">
         actor {nIn}→{c.hidden}→{env.actions.length} · critic {nIn}→{c.hidden}→1 · {c.optimizer ?? "adam"} · lr {c.actor_lr} / {c.critic_lr}
       </Kv>
-      <div className="pt-1.5 text-right">
+      <div className={`pt-1.5 text-right ${STATIC ? "hidden" : ""}`}>
         <Link href="/learn" className="text-[12px] text-[#2a78d6] hover:underline">
           step through one batch actor-critic update →
         </Link>
@@ -1674,16 +1672,16 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
     let timer = 0;
     const load = async () => {
       try {
-        const res = await fetch(`${BACKEND}/api/cli/algos${q(env)}`);
+        const res = await fetch(cliUrl("algos", env.key));
         if (!res.ok) throw new Error(res.statusText);
         const d: AlgoSummary[] = await res.json();
         if (!alive) return;
         setAlgos(d);
         setErr("");
       } catch (e) {
-        if (alive) setErr(e instanceof Error && e.message !== "Failed to fetch" ? e.message : "Backend not reachable on :8000.");
+        if (alive) setErr(STATIC ? "Could not load the saved runs." : e instanceof Error && e.message !== "Failed to fetch" ? e.message : "Backend not reachable on :8000.");
       }
-      if (alive) timer = window.setTimeout(load, 3000);
+      if (alive && !STATIC) timer = window.setTimeout(load, 3000); // the hosted copy never changes
     };
     load();
     return () => {
@@ -1702,7 +1700,7 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
   useEffect(() => {
     if (!version) return;
     let alive = true;
-    fetch(`${BACKEND}/api/cli/run/${algo}${q(env)}`)
+    fetch(cliUrl(`run/${algo}`, env.key))
       .then((r) => (r.ok ? r.json() : null))
       .then((d: RunData | null) => alive && d && setRun(d))
       .catch(() => {});

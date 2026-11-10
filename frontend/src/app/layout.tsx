@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RL playground",
-  description: "Plain actor-critic, live: what is learning, which part, and why",
+  title: "Deep RL Lab",
+  description: "Actor-critic to PPO, one change at a time: what is learning, which part, and why",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
