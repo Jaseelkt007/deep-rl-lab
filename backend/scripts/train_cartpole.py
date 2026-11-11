@@ -242,6 +242,36 @@ def reference_action(state) -> int:
     return SPEC.reference(state)
 
 
+_viewer = None  # the window process that is playing right now, if any
+
+
+def show_window(session, label: str) -> None:
+    """Play the current policy in a window in a SEPARATE process, so training does not wait. The window
+    gets a copy of the actor's weights from now; if the previous window is still playing, skip this one."""
+    import multiprocessing as mp
+
+    from rl.viewer import play_greedy
+
+    global _viewer
+    if _viewer is not None and _viewer.is_alive():
+        print(f"     ↳ (the previous window is still playing; no window for {label})")
+        return
+    state = {k: v.detach().cpu().clone() for k, v in session.actor.state_dict().items()}
+    _viewer = mp.get_context("spawn").Process(
+        target=play_greedy, daemon=True,
+        args=(SPEC.env_id, dict(SPEC.env_kwargs), state, session.cfg.hidden, SPEC.n_actions, 10_000, label,
+              SPEC.measure == "score"))
+    _viewer.start()
+    print(f"     ↳ window opened for the policy at {label} (training goes on)")
+
+
+def close_window(wait: float = 60.0) -> None:
+    """At the end: give the last window time to finish (it would be killed when the script exits)."""
+    if _viewer is not None and _viewer.is_alive():
+        print("waiting for the last window to finish …")
+        _viewer.join(wait)
+
+
 @torch.no_grad()
 def greedy_action(session: ExplainSession, state) -> int:
     x = torch.as_tensor(session.encoder(np.asarray(state), 0))
@@ -464,6 +494,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--eval-every", type=int, default=10)
     ap.add_argument("--render-every", type=int, default=25, help="show the current policy playing every N iterations (0 = never)")
+    ap.add_argument("--render-blocking", action="store_true",
+                    help="play the window inside the training process (training waits), as before")
     ap.add_argument("--render-every-steps", type=int, default=0,
                     help="instead: show it each time training passes another N environment steps, so every algorithm is "
                          "shown at the same points (e.g. 100000 = 10 windows in 1M steps); replaces --render-every")
@@ -504,6 +536,7 @@ def main() -> None:
         print(f"\nDone. Compare them on {web_page()}")
     else:
         train(args.algo, args)
+    close_window()
 
 
 def train(algo: str, args) -> None:
@@ -656,14 +689,17 @@ def train(algo: str, args) -> None:
             by_steps = args.render_every_steps and env_steps // args.render_every_steps > prev_steps // args.render_every_steps
             by_iters = not args.render_every_steps and args.render_every and it % args.render_every == 0
             if by_steps or by_iters:  # independent of --record-every; always the same start and the most likely action
-                print(f"     ↳ showing the current policy in a window (iteration {it}, {env_steps:,} env steps) …")
-                try:
-                    w_len, _, w_score = evaluate(lambda st: greedy_action(session, st), episodes=1, render=True)
-                    shown = f"score {w_score:.0f}" if SPEC.measure == "score" else f"{w_len:.0f} steps"
-                    print(f"     ↳ that episode: {shown}")
-                except Exception as err:  # no display available
-                    print(f"     ↳ cannot open a window ({err}); use --render-every 0")
-                    args.render_every = args.render_every_steps = 0
+                if args.render_blocking:
+                    print(f"     ↳ showing the current policy in a window (iteration {it}, {env_steps:,} env steps) …")
+                    try:
+                        w_len, _, w_score = evaluate(lambda st: greedy_action(session, st), episodes=1, render=True)
+                        shown = f"score {w_score:.0f}" if SPEC.measure == "score" else f"{w_len:.0f} steps"
+                        print(f"     ↳ that episode: {shown}")
+                    except Exception as err:  # no display available
+                        print(f"     ↳ cannot open a window ({err}); use --render-every 0")
+                        args.render_every = args.render_every_steps = 0
+                else:
+                    show_window(session, f"iteration {it}, {env_steps:,} env steps")
             status("running", it, env_steps)
             if fig is not None and (live or last):
                 _draw(fig, axes, rows, live)
