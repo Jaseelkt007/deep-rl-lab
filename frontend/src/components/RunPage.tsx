@@ -30,6 +30,7 @@ interface AlgoConfig {
   lr_decay?: "none" | "cosine";
   gae_lambda_end?: number | null; // λ rises from gae_lambda towards this
   trunc_as_end?: boolean;
+  init?: "default" | "orthogonal"; // orthogonal: policy head ×0.01, so all actions start almost equally likely
   hidden: number;
   actor_lr: number;
   critic_lr: number;
@@ -225,7 +226,7 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; why: stri
     tab: "PPO, 1 step",
     name: "PPO with 1 gradient step per batch",
     adds: "not a rung: PPO's loss with ONE gradient step per 2,048-step batch (so r = 1 and the clip never acts), one Adam for both networks with the gradient clipped together, lr falling to 0, λ rising 0.9 → 0.98",
-    why: "PPO's loss, GAE and critic target, but only one gradient step per batch, taken with the weights that collected it. There r = 1 exactly, so the clip never acts and the step is the plain −A·log π step of batch AC, with GAE advantages normalised over the batch and clipped to ±10. Actor and critic share one Adam (loss L_π + 0.5·L_V) and their gradients are clipped together to norm 0.5; the learning rate falls from 5·10⁻⁴ to 0 along a cosine and λ rises from 0.9 towards 0.98 over the run. Compare it with batch AC (also one step per batch) and with PPO (320 steps per batch).",
+    why: "PPO's loss, GAE and critic target, but only one gradient step per batch, taken with the weights that collected it. There r = 1 exactly, so the clip never acts and the step is the plain −A·log π step of batch AC, with GAE advantages normalised over the batch and clipped to ±10. Actor and critic share one Adam (loss L_π + 0.5·L_V) and their gradients are clipped together to norm 0.5; the learning rate falls from 5·10⁻⁴ to 0 along a cosine and λ rises from 0.9 towards 0.98 over the run. Compare it with batch AC (also one step per batch) and with PPO (320 steps per batch). Adam moves each weight by about one learning rate per step at most, so it needs small batches (--batch-steps 128 or 32) to get enough steps; with 2,048-step batches the policy stays almost 50/50, and only the most likely action can look trained.",
     color: "#1f8fb3",
   },
 ];
@@ -1471,6 +1472,7 @@ function UpdatePanel({ c }: { c: AlgoConfig }) {
       </Kv>
       <Kv k="networks">
         actor {nIn}→{c.hidden}→{env.actions.length} · critic {nIn}→{c.hidden}→1 ·{" "}
+        {c.init === "orthogonal" && "orthogonal start (policy head ×0.01: all actions start almost equally likely) · "}
         {c.joint_opt ? (
           <>
             one Adam for both: loss L_π + {c.vf_coef ?? 0.5}·L_V, gradients clipped together to norm {c.max_grad_norm ?? "∞"} · lr {c.actor_lr}
