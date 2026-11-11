@@ -86,14 +86,15 @@ One more variant sits beside the ladder, not on it:
 
 | `--algo` | what it is | gradient steps per batch |
 |---|---|---|
-| `ppo_1step` | PPO's loss, GAE and critic target with **one** gradient step per 2,048-step batch, so r = 1 and the clip never acts (the step is batch AC's −A·log π). Also: one Adam for both networks (loss L_π + 0.5·L_V, eps 1e-5), their gradients clipped together to norm 0.5, learning rate 5e-4 falling to 0 along a cosine, λ rising from 0.9 towards 0.98 (about 0.97 at the end), advantages normalised over the whole batch and clipped to ±10, and the time limit treated as the end of the episode. Orthogonal starting weights (policy head ×0.01, so all actions start almost equally likely). The log adds `lam`, `lr` and the two networks' gradient norms before clipping (`gn_actor`, `gn_critic`). | 1 |
+| `ppo_1step` | (This is an experimentation.) PPO's loss, GAE and critic target with **one** gradient step per 64-step batch, so r = 1 and the clip never acts (the step is batch AC's −A·log π). Also: one Adam for both networks (loss L_π + 0.5·L_V, eps 1e-5), their gradients clipped together to norm 0.5, learning rate 5e-4 falling to 0 along a cosine, λ rising from 0.9 towards 0.98 (about 0.97 at the end), advantages normalised over the whole batch and clipped to ±10, and the time limit treated as the end of the episode. Orthogonal starting weights (policy head ×0.01, so all actions start almost equally likely). The log adds `lam`, `lr` and the two networks' gradient norms before clipping (`gn_actor`, `gn_critic`). | 1 |
 
-**`ppo_1step` needs small batches.** Adam moves each weight by about one learning rate per step at most. With 2,048-step batches and a 200k-step budget that is 98 steps of at most 5e-4, so no weight moves more than about 0.025. Pass `--batch-steps 128` (1,563 steps) or `--batch-steps 32` (6,250 steps). On CartPole, after 200k steps:
+**Why 64-step batches.** Adam moves each weight by about one learning rate per step at most. With 2,048-step batches and a 200k-step budget that is 98 steps of at most 5e-4, so no weight moves more than about 0.025. `ppo_1step` therefore defaults to 64-step batches (3,125 steps in 200k); `--batch-steps N` sets another size. On CartPole, after 200k steps:
 
 | `--batch-steps` | gradient steps | sampled episode length | entropy (0.693 = 50/50) | most-likely-action length |
 |---|---|---|---|---|
 | 2,048 | 98 | 21 | 0.693 | 379 |
 | 128 | 1,563 | 102 | 0.615 | 489 |
+| **64 (default)** | 3,125 | 127 | 0.526 | 500 |
 | 32 | 6,250 | 300 | 0.538 | 497 |
 
 The first row is a trap: the policy is still 50/50, but its most likely action already balances the pole, because with near-zero logits the tiny differences decide it. Judge this variant by the sampled episodes and the entropy.
