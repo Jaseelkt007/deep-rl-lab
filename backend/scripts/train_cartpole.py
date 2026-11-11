@@ -464,6 +464,9 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--eval-every", type=int, default=10)
     ap.add_argument("--render-every", type=int, default=25, help="show the current policy playing every N iterations (0 = never)")
+    ap.add_argument("--render-every-steps", type=int, default=0,
+                    help="instead: show it each time training passes another N environment steps, so every algorithm is "
+                         "shown at the same points (e.g. 100000 = 10 windows in 1M steps); replaces --render-every")
     ap.add_argument("--plot", action=argparse.BooleanOptionalAction, default=True,
                     help="plot to <run folder>/plot.png and open it at the end")
     ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
@@ -494,7 +497,7 @@ def main() -> None:
     if not SPEC.can_set_state:
         args.truth_every = 0  # no ground-truth critic check (rollouts cannot start in a given state)
     if args.algo == "all":  # the whole ladder, one after another, no windows
-        args.render_every, args.open = 0, False
+        args.render_every, args.render_every_steps, args.open = 0, 0, False
         for algo in ALGOS:
             print(f"\n========== {algo}: {ALGOS[algo]} ==========")
             train(algo, args)
@@ -583,6 +586,7 @@ def train(algo: str, args) -> None:
             G, V = np.array(tr["returns"]), np.array(tr["values"])  # V: critic BEFORE its step, on fresh data
             rel = float(np.sqrt(np.mean((G - V) ** 2)) / (np.sqrt(np.mean(G**2)) + 1e-12))
             corr = float(np.corrcoef(G, V)[0, 1]) if G.std() > 1e-9 and V.std() > 1e-9 else float("nan")
+            prev_steps = env_steps
             env_steps += s["steps"]
             # episode LENGTH (CartPole: = return) and the share of the finished episodes that succeeded
             if "finished_lengths" in s:  # PPO session: the episodes that ended in this batch
@@ -649,13 +653,17 @@ def train(algo: str, args) -> None:
                 ep = record_episode(session, it, out_dir / "episodes")
                 record_training_episode(tr, it, out_dir / "episodes")
                 print(f"     ↳ recorded the current policy playing: {ep['steps']} steps (episodes/{ep['name']}.gif)")
-            if args.render_every and it % args.render_every == 0:  # independent of --record-every
-                print(f"     ↳ showing the current policy in a window (iteration {it}) …")
+            by_steps = args.render_every_steps and env_steps // args.render_every_steps > prev_steps // args.render_every_steps
+            by_iters = not args.render_every_steps and args.render_every and it % args.render_every == 0
+            if by_steps or by_iters:  # independent of --record-every; always the same start and the most likely action
+                print(f"     ↳ showing the current policy in a window (iteration {it}, {env_steps:,} env steps) …")
                 try:
-                    evaluate(lambda st: greedy_action(session, st), episodes=1, render=True)
+                    w_len, _, w_score = evaluate(lambda st: greedy_action(session, st), episodes=1, render=True)
+                    shown = f"score {w_score:.0f}" if SPEC.measure == "score" else f"{w_len:.0f} steps"
+                    print(f"     ↳ that episode: {shown}")
                 except Exception as err:  # no display available
                     print(f"     ↳ cannot open a window ({err}); use --render-every 0")
-                    args.render_every = 0
+                    args.render_every = args.render_every_steps = 0
             status("running", it, env_steps)
             if fig is not None and (live or last):
                 _draw(fig, axes, rows, live)
