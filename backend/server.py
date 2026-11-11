@@ -393,7 +393,7 @@ def learn_trace(sid: str, k: int) -> dict:
 # runs/cli/<algo>/ (batch_ac, epochs, clip, gae, ppo)
 # ----------------------------------------------------------------------------
 CLI_NAME_RE = re.compile(r"^(iter\d{4}|train\d{4}|good)$")  # greedy recordings, training episodes, good policy
-CLI_ALGO_RE = re.compile(r"^[a-z_]+$")
+CLI_ALGO_RE = re.compile(r"^[a-z0-9_]+$")
 
 
 def _num(v: str):

@@ -14,6 +14,10 @@ to PPO. No web server needed.
     clip      + clip: loss −min(r·A, clip(r, 1−ε, 1+ε)·A), ε = 0.2 (stops the push once r is past 1±ε)
     gae       + GAE λ = 0.95: A from the critic's one-step errors δ instead of G − V
     ppo       + 2,048-step batches, minibatches of 64, normalised advantages, lr 1e-3 / 3e-3
+    ppo_1step PPO with ONE gradient step per 2,048-step batch (so r = 1 and the clip never acts); one Adam for
+              both networks (loss L_π + 0.5·L_V, gradients clipped together to norm 0.5), lr 5e-4 falling along
+              a cosine to 0, λ rising 0.9 → 0.98, advantages normalised over the batch and clipped to ±10,
+              time limit = end of episode. Not a rung: compare it with batch_ac (1 step) and ppo.
 Every algorithm trains for the same --budget of environment steps (default 200,000).
 
 The LATEST run of each algorithm is saved in runs/cli/<algo>/ (double cart-pole: runs/double_cartpole/<algo>/),
@@ -103,6 +107,7 @@ ALGOS = {
     "clip": "+ clip ε = 0.2 (loss −min(r·A, clip(r)·A))",
     "gae": "+ GAE λ = 0.95",
     "ppo": "PPO (2,048-step batches, minibatches of 64, advantage normalisation)",
+    "ppo_1step": "PPO with 1 gradient step per batch (joint Adam, gradient clip 0.5, cosine lr, λ 0.9→0.98)",
 }
 
 
@@ -117,6 +122,7 @@ def make_session(algo: str, args):
         return ExplainSession(cfg), cfg.model_dump()
     base = {**PPOConfig().model_dump(), **VARIANTS[algo]}
     cfg = PPOConfig(**{**base, "env_id": SPEC.env_id, "shaping": SPEC.shaping, "env_kwargs": SPEC.env_kwargs, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, SPEC.hidden),
+                       "total_steps": args.budget,
                        "actor_lr": pick(args.actor_lr, base["actor_lr"]), "critic_lr": pick(args.critic_lr, base["critic_lr"]),
                        **({"batch_episodes": args.batch} if args.batch is not None and base["batch_episodes"] else {})})
     return PPOSession(cfg), cfg.model_dump()
@@ -574,7 +580,7 @@ def train(algo: str, args) -> None:
     print(f"untrained policy: eval {un_v:.0f}, succeeds {un_ok:.0%}   (budget {args.budget:,} env steps, hidden {hidden})\n")
     cols = ["iter", "ret", "env_steps", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "clip_frac", "agree", "p_good",
             "ce_good", "dir", "eval", "success", "eval_success", "score", "eval_score", "max_x", "true_err", "noise", "V_mean",
-            "Vtrue_mean"]
+            "Vtrue_mean", "lam", "lr", "gn_actor", "gn_critic"]
     print(f"{'iter':>4} {'ret':>6} {'Lv (before → after)':>22} {'rel':>5} {'corr':>5} {'Lpi':>8} {'H':>5} {'EV':>6} "
           f"{'|A|':>6} {'KL':>8} {'agree':>6} {'p_good':>6} {'ce_good':>7} {'dir':>5} {'eval':>5}")
 
@@ -649,7 +655,9 @@ def train(algo: str, args) -> None:
                    # MountainCar: the highest position each episode (piece) reached, averaged; the flag is at 0.5
                    "max_x": (float(np.mean([max(st[0] for st in ep["states"]) for ep in tr["episodes"] if ep["states"]]))
                              if SPEC.success_is_terminal else None),
-                   "true_err": None, "noise": None, "V_mean": None, "Vtrue_mean": None}
+                   "true_err": None, "noise": None, "V_mean": None, "Vtrue_mean": None,
+                   # PPO sessions: λ and the learning rate of this batch; joint optimiser: gradient norms
+                   "lam": s.get("lam"), "lr": s.get("lr"), "gn_actor": s.get("gn_actor"), "gn_critic": s.get("gn_critic")}
             if it % args.eval_every == 0 or it == 1 or last:
                 row["eval"], row["eval_success"], row["eval_score"] = evaluate(lambda st: greedy_action(session, st))
             truth_line = ""
