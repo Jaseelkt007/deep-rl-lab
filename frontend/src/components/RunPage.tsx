@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
+import { Fragment, ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
 import { STATIC, cliUrl } from "@/lib/api";
 import { ACTION_COLORS, ACTION_GLYPH, C } from "@/lib/colors";
 import type { EnvId, StepRec } from "@/lib/types";
@@ -163,12 +163,13 @@ interface Episode extends EpisodeInfo {
 }
 
 /** From our batch actor-critic to PPO, one switch at a time (backend/rl/ppo.py). */
-const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; color: string }[] = [
+const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; why: string; color: string }[] = [
   {
     key: "batch_ac",
     tab: "Batch AC",
     name: "Batch Actor-Critic",
     adds: "the start: 5 episodes → 1 gradient step → throw the batch away",
+    why: "The starting point. The policy (the actor) plays 5 episodes; on every step the advantage A = G − V(s) says whether the action did better or worse than the critic expected. One gradient step on −A·log π makes the better actions more likely, and the critic moves V(s) towards the returns G. Then the batch is thrown away, because after the update it no longer comes from the current policy.",
     color: C.muted,
   },
   {
@@ -176,6 +177,7 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; color: st
     tab: "+ epochs",
     name: "Batch Actor-Critic + 10 epochs",
     adds: "use every batch 10 times: 10 gradient steps instead of 1, with the same loss −A·log π, as if the current policy had played the batch",
+    why: "Batch AC with one change: each batch is used for 10 gradient steps instead of 1. The motivation is data efficiency: playing episodes is the expensive part, so learning more from every batch should need fewer environment steps. The catch: after the first step the policy is no longer the one that played the batch, but the loss still treats it as if it were, so the updates can overshoot.",
     color: "#6250d6",
   },
   {
@@ -183,6 +185,7 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; color: st
     tab: "+ ratio",
     name: "+ importance ratio (no clip)",
     adds: "loss −r·A with r = π(a|s)/π_old(a|s): corrects for the batch coming from π_old (r = 1 in epoch 1, so epoch 1 is unchanged), but nothing limits how far r goes",
+    why: "Fixes that mismatch with importance sampling: each step's push is weighted by r = π(a|s) / π_old(a|s), how much more or less likely the action has become since the batch was played. In the first epoch r = 1, so nothing changes; in later epochs the gradient is correct for data from π_old. But nothing limits r, so one batch can still move the policy very far.",
     color: "#e34948",
   },
   {
@@ -190,6 +193,7 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; color: st
     tab: "+ clip",
     name: "+ clip (ε = 0.2)",
     adds: "the brake: once r has moved past 1.2 (A > 0) or below 0.8 (A < 0), that step stops pushing",
+    why: "Adds a brake (ε = 0.2): the loss becomes −min(r·A, clip(r, 0.8, 1.2)·A). Once an action has become 20% more likely (A > 0) or 20% less likely (A < 0), that step stops pushing, so one batch can move the policy only a limited amount. This keeps the extra epochs while preventing the large jumps the ratio alone allows.",
     color: "#eda100",
   },
   {
@@ -197,6 +201,7 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; color: st
     tab: "+ GAE",
     name: "+ GAE (λ = 0.95)",
     adds: "advantage from the critic's one-step errors δ, weighted by (γλ)ᵏ, instead of the full return G − V",
+    why: "Changes how the advantage is measured. Instead of the full return G − V(s), which carries the randomness of every later step, A is built from the critic's one-step errors δ = r + γV(s′) − V(s), weighted by (γλ)ᵏ with λ = 0.95. A little bias for much less noise, so the actor gets a cleaner signal; the critic's target becomes A + V_old.",
     color: "#e87ba4",
   },
   {
@@ -204,6 +209,7 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; color: st
     tab: "PPO",
     name: "PPO",
     adds: "fixed 2,048-step batches, minibatches of 64, advantages normalised per minibatch, smaller learning rates",
+    why: "Proximal Policy Optimization: everything above (epochs, ratio, clip, GAE) plus the settings it is normally run with: fixed batches of 2,048 steps, 10 epochs over minibatches of 64 (320 small gradient steps per batch), advantages normalised per minibatch, and smaller learning rates. Many small, controlled steps per batch instead of a few large ones.",
     color: C.ink,
   },
 ];
@@ -582,6 +588,14 @@ const B = ({ on, children }: { on: boolean; children: ReactNode }) => (on ? <b c
 
 function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected: AlgoKey; onSelect: (a: AlgoKey) => void }) {
   const env = useEnv();
+  // which "what is it and why" notes are open (a click on the name)
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const flip = (k: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(k)) next.add(k);
+      return next;
+    });
   const [speedY, setSpeedY] = useState<"ret" | "eval">("ret");
   const { have, by } = useMemo(
     () => ({
@@ -677,6 +691,25 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
   ); // MountainCar: fewer steps is better; LunarLander: the median score
 
   const cell = "px-2 py-1.5 text-right tabular-nums";
+  const nCols = 8 + (flag ? 0 : 2) + (env.success === "score" ? 1 : 0);
+  const nameCell = (k: string) => ({
+    className: "whitespace-nowrap px-2 py-1.5 text-left",
+    title: open.has(k) ? "hide the explanation" : "what is it, and why?",
+    onClick: () => flip(k), // the row's own click (open this algorithm below) still happens
+  });
+  const chevron = (k: string) => (
+    <span aria-hidden className={`mr-1 inline-block w-2.5 text-[9px] text-neutral-400 transition-transform ${open.has(k) ? "rotate-90" : ""}`}>
+      ▶
+    </span>
+  );
+  const note = (k: string, children: ReactNode) =>
+    open.has(k) ? (
+      <tr>
+        <td colSpan={nCols} className="px-2 pb-2.5 pt-0 text-left">
+          <div className="ml-5 max-w-[880px] rounded-md bg-[#f6f6f4] px-3 py-2 text-[12px] leading-relaxed text-neutral-700">{children}</div>
+        </td>
+      </tr>
+    ) : null;
   const head = "px-2 py-1 text-right font-normal";
   const maxSteps = good?.max_steps ?? 10000;
   const qualityCells = (q: Quality, bold: boolean) => (
@@ -712,7 +745,7 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
   return (
     <Panel
       title="Compare the algorithms"
-      help="Every algorithm gets the same budget of environment steps (200,000). Their iterations are NOT comparable (a PPO iteration is 2,048 steps, a batch actor-critic iteration is 5 episodes), so the x-axis here is environment steps. Speed: steps until the greedy policy first succeeds on all 10 eval starts (CartPole: balances 500 steps; MountainCar: reaches the flag). Stability: after the first solved batch, how often later batches stay solved. Quality: the FINAL policy, most likely action, tested from 20 start states (CartPole: up to 10,000 steps; MountainCar: within the 200-step limit, fewer steps is better). Click a row to open that algorithm below."
+      help="Every algorithm gets the same budget of environment steps (200,000). Their iterations are NOT comparable (a PPO iteration is 2,048 steps, a batch actor-critic iteration is 5 episodes), so the x-axis here is environment steps. Speed: steps until the greedy policy first succeeds on all 10 eval starts (CartPole: balances 500 steps; MountainCar: reaches the flag). Stability: after the first solved batch, how often later batches stay solved. Quality: the FINAL policy, most likely action, tested from 20 start states (CartPole: up to 10,000 steps; MountainCar: within the 200-step limit, fewer steps is better). Click a name to read what it is and why it was added; the click also opens that algorithm below."
     >
       <div className="space-y-3">
         <div className="overflow-x-auto">
@@ -738,12 +771,14 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
                 const ss = a?.scorecard?.speed_stability;
                 const u = a ? updates(a.settings.config) : null;
                 return (
+                  <Fragment key={l.key}>
                   <tr
                     key={l.key}
                     onClick={() => a && onSelect(l.key)}
                     className={`border-t border-neutral-100 ${a ? "cursor-pointer hover:bg-neutral-50" : "text-neutral-400"} ${selected === l.key ? "bg-neutral-50" : ""}`}
                   >
-                    <td className="whitespace-nowrap px-2 py-1.5 text-left">
+                    <td {...nameCell(l.key)}>
+                      {chevron(l.key)}
                       <Swatch color={l.color} />
                       <span className={selected === l.key ? "font-medium" : ""}>{l.tab}</span>
                     </td>
@@ -777,11 +812,19 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
                       </>
                     )}
                   </tr>
+                  {note(
+                    l.key,
+                    <>
+                      <b className="font-medium text-neutral-900">{l.name}.</b> {l.why}
+                    </>,
+                  )}
+                  </Fragment>
                 );
               })}
               {good && (
-                <tr className="border-t border-neutral-100">
-                  <td className="whitespace-nowrap px-2 py-1.5 text-left">
+                <tr className="cursor-pointer border-t border-neutral-100 hover:bg-neutral-50">
+                  <td {...nameCell("good")}>
+                    {chevron("good")}
                     <Swatch color={GOOD_COLOR} dashed />
                     good policy (hand-written)
                   </td>
@@ -792,6 +835,14 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
                   {qualityCells(good, false)}
                 </tr>
               )}
+              {good &&
+                note(
+                  "good",
+                  <>
+                    <b className="font-medium text-neutral-900">Good policy.</b> Not learned: a hand-written rule ({env.goodPolicy}). It is tested
+                    exactly like the final learned policies, so it shows what a good policy achieves here, a reference for the rows above.
+                  </>,
+                )}
             </tbody>
           </table>
         </div>
