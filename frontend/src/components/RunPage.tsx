@@ -4,12 +4,11 @@ import Link from "next/link";
 import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
 import { STATIC, cliUrl } from "@/lib/api";
 import { ACTION_COLORS, ACTION_GLYPH, C } from "@/lib/colors";
-import { fmt } from "@/lib/math";
 import type { EnvId, StepRec } from "@/lib/types";
 import EnvView from "./EnvView";
 import NavBar from "./NavBar";
 import Panel from "./Panel";
-import UChart, { LegendToggles, Marker, SeriesSpec } from "./UChart";
+import UChart, { LegendToggles, SeriesSpec } from "./UChart";
 
 // ------------------------------------------------------------------ data
 type Row = Record<string, number | null>;
@@ -919,160 +918,7 @@ function Controls({ pb, children }: { pb: ReturnType<typeof usePlayback>; childr
   );
 }
 
-function Player({ ep, algo }: { ep: Episode; algo: AlgoKey }) {
-  const env = useEnv();
-  const n = ep.actions.length;
-  const pb = usePlayback(n);
-  const i = pb.i;
-  const s = ep.states[i];
-  const step = { s, a: ep.actions[i], p: ep.probs[i] } as unknown as StepRec;
-  const good = ep.good_actions?.[i] ?? env.goodAction(s);
-  // a sampled step that was NOT the most likely action: exploration
-  const explored = ep.kind === "training" && ep.actions[i] !== ep.probs[i].indexOf(Math.max(...ep.probs[i]));
-  const exploredShare = useMemo(
-    () => (ep.kind === "training" ? ep.actions.filter((a, k) => a !== ep.probs[k].indexOf(Math.max(...ep.probs[k]))).length / ep.actions.length : null),
-    [ep],
-  );
-  const trace = useMemo(
-    () => ({
-      x: ep.states.map((_, k) => k + 1),
-      ys: env.traces.map((t) => ep.states.map((st) => t.f(st))),
-      series: env.traces.map((t) => ({ label: t.label, color: t.color, width: 1.5, dash: t.dash })),
-    }),
-    [ep, env],
-  );
-  const markers: Marker[] = [{ x: i + 1, label: "", color: C.ink2 }];
-  const actions = env.actions;
-  return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
-      <div>
-        <EnvView envId={env.envId} step={step} trail={[]} actionNames={actions} />
-        {exploredShare != null && (
-          <div className="mt-1 text-[11px] text-neutral-500">
-            a real training episode (its own start): the sampled action was not the most likely one on {(exploredShare * 100).toFixed(0)}% of the steps
-          </div>
-        )}
-        <Controls pb={pb}>
-          {ep.kind !== "training" && !STATIC && (
-            <a className="text-[#2a78d6] hover:underline" href={cliUrl(`run/${algo}/gif/${ep.name}`, env.key)} target="_blank" rel="noreferrer">
-              GIF
-            </a>
-          )}
-        </Controls>
-      </div>
-      <div className="space-y-3">
-        <table className="w-full text-[12px] tabular-nums">
-          <tbody>
-            {env.state.map((d, k) => {
-              const v = d.derived ? d.derived(s) : s[k];
-              return (
-                <tr key={d.name} className={`border-b border-neutral-100 ${d.derived ? "text-neutral-400" : ""}`}>
-                  <td className={`py-0.5 ${d.derived ? "" : "text-neutral-500"}`}>{d.name}</td>
-                  <td className={`py-0.5 text-right ${d.derived ? "" : "text-neutral-900"}`}>
-                    {fmt(v, 3)} {d.unit}
-                    {d.deg ? ` (${(v * DEG).toFixed(1)}°)` : ""}
-                  </td>
-                  <td className="py-0.5 text-right text-neutral-400" title={d.derived ? "not a network input" : "network input (scaled)"}>
-                    {d.derived ? "" : ((v - (d.offset ?? 0)) / d.scale).toFixed(2)}
-                  </td>
-                </tr>
-              );
-            })}
-            <tr>
-              <td className="py-0.5 text-neutral-500">{ep.name === "good" ? "good policy" : "agent"} pushes</td>
-              <td className="py-0.5 text-right" style={{ color: ACTION_COLORS[actions[ep.actions[i]]] }}>
-                {explored && <span className="mr-1 rounded bg-[#fdf3dc] px-1 text-[10.5px] text-[#8a5a00]">explored</span>}
-                {actions[ep.actions[i]]}
-              </td>
-              <td className="py-0.5 text-right text-neutral-400">P {ep.probs[i][ep.actions[i]].toFixed(2)}</td>
-            </tr>
-            {ep.name !== "good" && (
-              <tr>
-                <td className="py-0.5 text-neutral-500">good policy</td>
-                <td className="py-0.5 text-right" style={{ color: ACTION_COLORS[actions[good]] }}>
-                  {actions[good]}
-                </td>
-                <td className="py-0.5 text-right text-neutral-400">{good === ep.actions[i] ? "same" : "differs"}</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-        <div>
-          <div className="text-[11px] text-neutral-500">{env.traceNote}</div>
-          <UChart x={trace.x} ys={trace.ys} height={120} yRange={[-1, 1]} markers={markers} xLabel="step" series={trace.series} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Episodes({ data }: { data: RunData }) {
-  const env = useEnv();
-  const [mode, setMode] = useState<Mode>("greedy");
-  const learned = data.episodes.filter((e) => ofKind(e, mode));
-  const hasTraining = data.episodes.some((e) => ofKind(e, "training"));
-  const good = data.episodes.find((e) => e.name === "good");
-  const finalIter = data.status.state !== "running" ? learned.at(-1)?.iter : undefined;
-  const [sel, setSel] = useState<string | null>(null);
-  const current = (sel && (sel === "good" || learned.some((e) => e.name === sel)) ? sel : null) ?? learned.at(-1)?.name ?? null;
-  const [ep, setEp] = useState<Episode | null>(null);
-  useEffect(() => {
-    if (!current) return;
-    let alive = true;
-    fetch(cliUrl(`run/${data.algo}/episode/${current}`, env.key))
-      .then((r) => r.json())
-      .then((e: Episode) => alive && setEp(e))
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [current, data.algo, env]);
-  return (
-    <div>
-      <div className="mb-2 flex items-center gap-2">
-        <ModeSwitch mode={mode} setMode={setMode} />
-        {mode === "training" && !hasTraining && <span className="text-[11px] text-neutral-400">this run has no training episodes recorded: re-run it to get them</span>}
-      </div>
-      <div className="mb-3 flex flex-wrap items-center gap-1.5">
-        {learned.length > MANY && (
-          <select
-            className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-[12px] tabular-nums"
-            value={current ?? ""}
-            onChange={(e) => setSel(e.target.value)}
-          >
-            {learned.map((e) => (
-              <option key={e.name} value={e.name}>
-                {e.iter === finalIter ? "final " : ""}iteration {e.iter}: {env.success === "score" ? `score ${Math.round(e.score ?? 0)}` : `${e.steps} steps`}
-              </option>
-            ))}
-          </select>
-        )}
-        {(learned.length > MANY ? [] : learned).map((e) => {
-          const isFinal = e.iter === finalIter;
-          return (
-            <button
-              key={e.name}
-              onClick={() => setSel(e.name)}
-              className={`rounded border px-2 py-0.5 text-[12px] tabular-nums ${e.name === current ? "border-neutral-900 bg-neutral-900 text-white" : isFinal ? "border-[#2a78d6] bg-white text-[#2a78d6]" : "border-neutral-300 bg-white"}`}
-            >
-              {isFinal ? `final ${e.iter}` : e.iter}: {env.success === "score" ? Math.round(e.score ?? 0) : e.steps}
-            </button>
-          );
-        })}
-        {good && (
-          <button
-            onClick={() => setSel(good.name)}
-            className={`ml-2 rounded border px-2 py-0.5 text-[12px] tabular-nums ${good.name === current ? "border-[#1baf7a] bg-[#1baf7a] text-white" : "border-[#1baf7a] bg-white text-[#0b7a52]"}`}
-          >
-            good policy: {env.success === "score" ? Math.round(good.score ?? 0) : good.steps}
-          </button>
-        )}
-        <span className="ml-auto text-[11px] text-neutral-400">iteration: {env.label.length}</span>
-      </div>
-      {ep && ep.name === current && <Player key={ep.name} ep={ep} algo={data.algo} />}
-    </div>
-  );
-}
+const argmax = (p: number[]) => p.indexOf(Math.max(...p));
 
 /** More recorded episodes than this: a dropdown instead of one button each. */
 const MANY = 24;
@@ -1119,6 +965,11 @@ function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
     );
     return { x, ys, series };
   }, [epA, epB, labelA, labelB, colorA, colorB, n, env]);
+  // training episodes: share of steps where the sampled action was NOT the most likely one (exploration)
+  const explored = useMemo(
+    () => [epA, epB].map((ep) => (ep.kind === "training" ? ep.actions.filter((a, k) => a !== argmax(ep.probs[k])).length / ep.actions.length : null)),
+    [epA, epB],
+  );
   return (
     <div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -1158,7 +1009,15 @@ function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
               <div className="mt-1 text-[11.5px] tabular-nums text-neutral-600">
                 step {j + 1}/{len} · {env.status(s)}{" "}
                 {env.success === "limit" && !sd.ep.terminated && atEnd && <span className="text-[#0b7a52]">· reached {env.lengthMax}</span>}
+                {sd.ep.kind === "training" && sd.ep.actions[j] !== argmax(sd.ep.probs[j]) && (
+                  <span className="ml-1 rounded bg-[#fdf3dc] px-1 text-[10.5px] text-[#8a5a00]">explored</span>
+                )}
               </div>
+              {explored[k] != null && (
+                <div className="text-[11px] text-neutral-500">
+                  a real training episode: the sampled action was not the most likely one on {(explored[k]! * 100).toFixed(0)}% of the steps
+                </div>
+              )}
             </div>
           );
         })}
@@ -1627,14 +1486,7 @@ function AlgoDetail({ data }: { data: RunData }) {
   const rows = data.rows;
   return (
     <>
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_380px]">
-        <Panel
-          title="Recorded episodes"
-          help="The policy at iteration 1, every 10 iterations and at the end, always from the same start state and always taking its most likely action. 'good policy' = the hand-written rule on the same start."
-        >
-          {data.episodes.length > 0 ? <Episodes key={data.algo} data={data} /> : <div className="py-10 text-center text-[12px] text-neutral-400">no episodes recorded yet</div>}
-        </Panel>
-        <div className="space-y-3">
+      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2">
           <UpdatePanel c={data.settings.config} />
           <Panel title="Environment" help="What the agent observes and does. The state is fully observed; each number is divided by its range before going into the networks.">
             {env.state
@@ -1657,7 +1509,6 @@ function AlgoDetail({ data }: { data: RunData }) {
             <Kv k="reward">{env.reward}</Kv>
             <Kv k="ends">{env.ends}</Kv>
           </Panel>
-        </div>
       </div>
 
       {rows.length > 0 && (
