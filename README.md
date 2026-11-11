@@ -16,7 +16,7 @@ You need Python ≥ 3.11 with [uv](https://docs.astral.sh/uv/), and Node ≥ 20 
 ```bash
 cd backend && uv sync
 uv run python scripts/train_cartpole.py --algo all --render-every 0   # all 5 algorithms, one after another
-uv run python scripts/train_cartpole.py --algo ppo                    # or one: batch_ac | epochs | ratio | clip | gae | ppo
+uv run python scripts/train_cartpole.py --algo ppo                    # or one: batch_ac | epochs | ratio | clip | gae | ppo | ppo_1step
 ```
 - Every algorithm trains for the same 200,000 environment steps (`--budget`).
 - One log line per iteration in the terminal.
@@ -81,6 +81,12 @@ The code is `backend/rl/explain.py`. The training script is `backend/scripts/tra
 | `clip` | the brake: loss −min(r·A, clip(r, 0.8, 1.2)·A); a step past the limit stops pushing | 10 |
 | `gae` | advantage from the critic's one-step errors: δ = r + γV(s′) − V(s), A = Σ (γλ)ᵏ δ, λ = 0.95 | 10 |
 | `ppo` | 2,048-step batches (cut episodes continue next batch), shuffled minibatches of 64, advantages normalised per minibatch, learning rates 1e-3 / 3e-3 | 10 × 32 = 320 |
+
+One more variant sits beside the ladder, not on it:
+
+| `--algo` | what it is | gradient steps per batch |
+|---|---|---|
+| `ppo_1step` | PPO's loss, GAE and critic target with **one** gradient step per 2,048-step batch, so r = 1 and the clip never acts (the step is batch AC's −A·log π). Also: one Adam for both networks (loss L_π + 0.5·L_V, eps 1e-5), their gradients clipped together to norm 0.5, learning rate 5e-4 falling to 0 along a cosine, λ rising from 0.9 towards 0.98 (about 0.97 at the end), advantages normalised over the whole batch and clipped to ±10, and the time limit treated as the end of the episode. The log adds `lam`, `lr` and the two networks' gradient norms before clipping (`gn_actor`, `gn_critic`). | 1 |
 
 Still on-policy: each batch is played by the current policy, used for its epochs and thrown away. No action is taken during the update; the ratio only re-scores the stored (state, action) pairs under the new policy. The advantages and critic targets are computed once per batch, with the critic before the update.
 
