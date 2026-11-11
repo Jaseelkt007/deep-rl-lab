@@ -99,6 +99,8 @@ One more variant sits beside the ladder, not on it:
 
 With whole episodes (200k steps): CartPole 5 episodes per batch → 778 steps, sampled episodes 83 long; 8 → 627 steps, 44 long. MountainCar with the energy bonus: 5 → 200 steps, 8 → 125 steps, and the policy stays random (entropy 1.099) in both: at this learning rate that is too few steps.
 
+**What the experiment showed** (5 episodes per batch, one seed): the sampled policies stayed close to equal probabilities everywhere (entropy CartPole 0.69 → 0.64, double cart-pole 0.69 → 0.56, MountainCar 1.10 → 1.10, LunarLander 1.39 → 1.22 in 1M steps) and no run succeeded with sampled actions. The ×0.01 policy head only sets the start; the policies stayed near it because one small step per batch barely moves the networks. With a near-uniform policy the most likely action is decided by tiny differences, so a most-likely-action replay can look trained (CartPole at 0.54 / 0.46) while the policy is still close to random. The critic stayed flat throughout (EV ≈ 0).
+
 The first row is a trap: the policy is still 50/50, but its most likely action already balances the pole, because with near-zero logits the tiny differences decide it. Judge this variant by the sampled episodes and the entropy.
 
 Still on-policy: each batch is played by the current policy, used for its epochs and thrown away. No action is taken during the update; the ratio only re-scores the stored (state, action) pairs under the new policy. The advantages and critic targets are computed once per batch, with the critic before the update.

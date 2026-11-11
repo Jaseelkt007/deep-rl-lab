@@ -1662,6 +1662,15 @@ const ONE_STEP_DIFF: [string, string, string][] = [
   ["starting weights", "PyTorch's default", "orthogonal: hidden ×√2, policy head ×0.01 (all actions start almost equally likely), value head ×1, biases 0"],
 ];
 
+const ONE_STEP_FINDINGS = [
+  "One gradient step per batch makes the number of batches the limit. Adam moves each weight by about one learning rate per step at most, so 2,048-step batches (98 steps in 200k env steps, at most 5·10⁻⁴ each and falling to 0) left every weight within about 0.03 of its start. PPO's weights moved by 3 to 25.",
+  "64-step batches give enough steps (3,125), but each batch is one stretch of one episode: the measured losses zigzag with the episode cycle, and every step pulls towards one part of the state space.",
+  "Batches of 5 whole episodes give variety but few steps. After 200k steps the sampled policy still chose close to 50/50: entropy CartPole 0.69 → 0.64, double cart-pole 0.69 → 0.56, MountainCar 1.10 → 1.10 (unchanged, ⅓ each), LunarLander 1M steps 1.39 → 1.22. No run succeeded with sampled actions.",
+  "The ×0.01 policy head only sets the start: all actions equally likely. The policies stayed near that start because the networks barely moved, not because of the factor itself. With PyTorch's default start the same runs stayed at their random lean instead (MountainCar: always no push).",
+  "With a near-uniform policy the most likely action is decided by tiny differences. On CartPole 0.54 / 0.46 is enough to balance the pole, so the most-likely-action replay looks trained; on MountainCar the flag was reached at some checkpoints and lost at the next. Judge by the sampled episodes and the entropy.",
+  "The critic stayed flat the whole time (EV ≈ 0): steps of 5·10⁻⁴ cannot reach values of 10 to 100, and counting the time limit as the end gives it contradictory targets. Before the shared clip the critic's gradient was 30 to 250 times the actor's.",
+];
+
 function OneStepDiff() {
   return (
     <Panel
@@ -1692,6 +1701,14 @@ function OneStepDiff() {
         variety but few steps (MountainCar: 200 in 200k env steps; 64-step batches would give 3,125, each from one stretch
         of one episode). Judge it by the sampled episodes and the entropy: with a
         near-uniform start, the most likely action can look trained while the policy is still close to random.
+      </div>
+      <div className="mt-3 border-t border-neutral-100 pt-2 text-[12px]">
+        <div className="mb-1 font-medium text-neutral-900">What the experiment showed (one seed per run)</div>
+        <ul className="list-disc space-y-1 pl-5 text-neutral-700">
+          {ONE_STEP_FINDINGS.map((f) => (
+            <li key={f}>{f}</li>
+          ))}
+        </ul>
       </div>
     </Panel>
   );
