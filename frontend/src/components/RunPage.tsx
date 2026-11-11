@@ -29,6 +29,7 @@ interface AlgoConfig {
   gamma: number;
   optimizer?: string;
   seed: number;
+  env_kwargs?: Record<string, number | boolean>; // gym.make options, e.g. LunarLander's wind and gravity
 }
 interface Settings {
   algo: AlgoKey;
@@ -233,7 +234,7 @@ interface Trace {
   dash?: number[];
 }
 export interface EnvCfg {
-  key: "cartpole" | "double_cartpole" | "double_cartpole_joint" | "mountaincar" | "mountaincar_energy" | "lunarlander";
+  key: "cartpole" | "double_cartpole" | "double_cartpole_joint" | "mountaincar" | "mountaincar_energy" | "lunarlander" | "lunarlander_wind";
   envId: EnvId;
   title: string;
   tab: string;
@@ -478,6 +479,49 @@ export const ENVS: Record<EnvCfg["key"], EnvCfg> = {
     ],
     reward: "shaped: closer to the pad, slower and level is better; each leg touching +10; main engine −0.3 and side engines −0.03 per step; +100 for landing, −100 for crashing. The side engines are named by the way they push: 'left engine' blows its gas to the right, so the lander moves left and turns counter-clockwise",
     ends: "terminated: landed (comes to rest), crashed (the body touches the ground) or flew away (|x| ≥ 1) · truncated: 1,000 steps",
+    goodPolicy: "Gymnasium's hand-written heuristic",
+    goodAction: () => 0,
+    traces: [
+      { label: "x", f: (s) => s[0], color: C.ink },
+      { label: "height y / 1.6", f: (s) => s[1] / 1.6, color: "#6250d6" },
+      { label: "angle / 1 rad", f: (s) => s[4], color: C.critic },
+    ],
+    traceNote: "x (±1 = the edges), height y / 1.6 and the angle in rad",
+    endText: (_s, n) => `ended after ${n} steps`,
+    status: (s) => `x ${s[0].toFixed(2)} · y ${s[1].toFixed(2)} · angle ${(s[4] * DEG).toFixed(1)}°${s[6] > 0.5 || s[7] > 0.5 ? " · leg down" : ""}`,
+    angleColumn: "mean |angle|",
+    success: "score",
+    lengthMax: 1000,
+    label: {
+      length: "score (200 = solved)",
+      speed: "speed: steps until the greedy policy averages ≥ 200",
+      firstGood: "first batch averaging ≥ 200",
+      stays: "stability: stays ≥ 200",
+      quality: () => "score ≥ 200 (final test)",
+      median: "median score",
+      curve: "Quality: share of the 20 starts scoring at least s (final policy)",
+    },
+  },
+  lunarlander_wind: {
+    key: "lunarlander_wind",
+    envId: "LunarLander-v3",
+    title: "LunarLander + wind",
+    tab: "LunarLander · wind",
+    href: "/lunarlander-wind",
+    command: (algo) => `cd ~/my_deeprl_playground/backend && uv run python scripts/train_cartpole.py --env lunarlander_wind --algo ${algo}`,
+    actions: ["nothing", "left engine", "main engine", "right engine"],
+    state: [
+      { name: "x (0 = pad centre)", unit: "", range: "±1 = edge (end)", scale: 1 },
+      { name: "y (0 = pad height)", unit: "", range: "−0.2 … 1.6", scale: 0.9, offset: 0.7 },
+      { name: "x velocity", unit: "", range: "÷2", scale: 2 },
+      { name: "y velocity", unit: "", range: "÷2", scale: 2 },
+      { name: "angle", unit: "rad", range: "÷2", scale: 2, deg: true },
+      { name: "angular velocity", unit: "rad/s", range: "÷4", scale: 4 },
+      { name: "left leg down", unit: "", range: "0 or 1", scale: 0.5, offset: 0.5 },
+      { name: "right leg down", unit: "", range: "0 or 1", scale: 0.5, offset: 0.5 },
+    ],
+    reward: "shaped: closer to the pad, slower and level is better; each leg touching +10; main engine −0.3 and side engines −0.03 per step; +100 for landing, −100 for crashing. The side engines are named by the way they push: 'left engine' blows its gas to the right, so the lander moves left and turns counter-clockwise",
+    ends: "with wind (strength 15) and random gusts (1.5) while in the air; the agent does not see them, only their effect on its speed · terminated: landed (comes to rest), crashed (the body touches the ground) or flew away (|x| ≥ 1) · truncated: 1,000 steps",
     goodPolicy: "Gymnasium's hand-written heuristic",
     goodAction: () => 0,
     traces: [
@@ -1831,6 +1875,12 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
               (["hidden", "actor_lr", "critic_lr", "gamma", "seed"] as const).map((k) => (
                 <span key={k} className="rounded bg-neutral-100 px-1.5 py-0.5 tabular-nums">
                   {k} {String(cfg[k])}
+                </span>
+              ))}
+            {cfg?.env_kwargs &&
+              Object.entries(cfg.env_kwargs).map(([k, v]) => (
+                <span key={k} className="rounded bg-[#eef5fd] px-1.5 py-0.5 tabular-nums text-[#1d4f8f]" title="environment setting">
+                  {k.replace("_", " ")} {String(v)}
                 </span>
               ))}
             <button
