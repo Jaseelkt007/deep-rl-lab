@@ -22,11 +22,19 @@ One iteration:
 
 With epochs = 1, minibatch = whole batch, clip = None, λ = 1 and 5-episode batches this is
 the batch actor-critic of rl/explain.py.
+
+"ppo_1step" is PPO with ONE gradient step per batch: in that step r = 1, so the clip never acts and the
+step is a plain policy-gradient step, −A·log π. It also uses one Adam for both networks (loss L_π + 0.5·L_V,
+gradients clipped together to norm 0.5), a learning rate decaying along a cosine to 0, λ rising from 0.9
+towards 0.98, advantages normalised over the whole batch and clipped to ±10, and the time limit counted as
+the end of an episode (no V after it).
 """
 
 from __future__ import annotations
 
 from typing import Literal
+
+import math
 
 import numpy as np
 import torch
@@ -56,6 +64,17 @@ class PPOConfig(BaseModel):
     adv_norm: bool = False  # normalise A to mean 0, std 1 per minibatch
     shaping: Literal["none", "energy"] = "none"  # MountainCar: + 10·(γΦ(s′) − Φ(s)), Φ = energy (rl/envs.py)
     env_kwargs: dict[str, float | bool] = Field(default_factory=dict)  # gym.make options (LunarLander wind, gravity)
+    # one Adam for both networks on L_π + vf_coef·L_V (lr = actor_lr), gradients clipped TOGETHER to max_grad_norm;
+    # False: two separate Adams (actor_lr, critic_lr), no clipping
+    joint_opt: bool = False
+    vf_coef: float = Field(0.5, ge=0)
+    max_grad_norm: float | None = Field(None, gt=0)
+    adam_eps: float = Field(1e-8, gt=0)  # 1e-8 = PyTorch's default
+    lr_decay: Literal["none", "cosine"] = "none"  # cosine: the learning rate falls to 0 over total_steps
+    total_steps: int | None = Field(None, ge=1)  # the run's budget in environment steps (for the schedules)
+    gae_lambda_end: float | None = Field(None, ge=0, le=1)  # λ rises from gae_lambda towards this over the run
+    adv_clip: float | None = Field(None, gt=0)  # after normalising: clip A to ±adv_clip
+    trunc_as_end: bool = False  # the time limit counts as the end of the episode: no V after it
 
 
 # The ladder from our batch actor-critic to PPO: each rung adds one thing to the one before.
@@ -66,7 +85,27 @@ VARIANTS: dict[str, dict] = {
     "gae": {"epochs": 10, "ratio": True, "clip": 0.2, "gae_lambda": 0.95},
     "ppo": {"epochs": 10, "ratio": True, "clip": 0.2, "gae_lambda": 0.95, "batch_episodes": None, "batch_steps": 2048,
             "minibatch": 64, "adv_norm": True, "actor_lr": 1e-3, "critic_lr": 3e-3},
+    # not a rung on the ladder: PPO with a single gradient step per batch, and its own optimiser settings
+    "ppo_1step": {"epochs": 1, "ratio": True, "clip": 0.2, "gae_lambda": 0.9, "gae_lambda_end": 0.98,
+                  "batch_episodes": None, "batch_steps": 2048, "minibatch": None, "adv_norm": True, "adv_clip": 10.0,
+                  "joint_opt": True, "vf_coef": 0.5, "max_grad_norm": 0.5, "adam_eps": 1e-5,
+                  "actor_lr": 5e-4, "critic_lr": 5e-4, "lr_decay": "cosine", "trunc_as_end": True},
 }
+
+
+def lambda_at(cfg: PPOConfig, frac: float) -> float:
+    """λ after `frac` of the run: fixed, or rising from gae_lambda towards gae_lambda_end along
+    1 − sech(3·frac) (fast at first, then slowly: 0.9 → about 0.972 at the end for 0.9 → 0.98)."""
+    if cfg.gae_lambda_end is None:
+        return cfg.gae_lambda
+    return cfg.gae_lambda + (1 - 1 / math.cosh(3 * frac)) * (cfg.gae_lambda_end - cfg.gae_lambda)
+
+
+def lr_factor(cfg: PPOConfig, frac: float) -> float:
+    """The learning rate's multiplier after `frac` of the run: 1, or a cosine from 1 down to 0."""
+    if cfg.lr_decay == "none":
+        return 1.0
+    return 0.5 * (1 + math.cos(math.pi * min(1.0, frac)))
 
 
 def actor_loss(logp: torch.Tensor, logp_old: torch.Tensor, adv: torch.Tensor, clip: float | None,
@@ -114,8 +153,15 @@ class PPOSession:
         n_actions = int(self.env.action_space.n)
         self.actor = Actor(self.encoder.dim, n_actions, (cfg.hidden,))
         self.critic = Critic(self.encoder.dim, (cfg.hidden,))
-        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=cfg.actor_lr)
-        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=cfg.critic_lr)
+        if cfg.joint_opt:
+            self.params = [*self.actor.parameters(), *self.critic.parameters()]
+            self.opt = torch.optim.Adam(self.params, lr=cfg.actor_lr, eps=cfg.adam_eps)
+        else:
+            self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=cfg.actor_lr, eps=cfg.adam_eps)
+            self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=cfg.critic_lr, eps=cfg.adam_eps)
+        self.env_steps = 0  # collected so far (the schedules run over cfg.total_steps)
+        self.frac = 0.0  # share of the run done before the current batch
+        self.lam = cfg.gae_lambda  # λ used for the current batch
         self.gen = torch.Generator().manual_seed(cfg.seed)  # actions
         self.shuffle_gen = torch.Generator().manual_seed(cfg.seed + 1)  # minibatch order
         self.env.action_space.seed(cfg.seed)
@@ -183,13 +229,14 @@ class PPOSession:
     @torch.no_grad()
     def _advantages(self, X, rews, ends, next_obs):
         """GAE backwards along each episode, with the critic before any update."""
-        g, lam = self.cfg.gamma, self.cfg.gae_lambda
+        g, lam = self.cfg.gamma, lambda_at(self.cfg, self.frac)
+        self.lam = lam
         V = self.critic(torch.stack(X)).numpy().astype(np.float64)
         V_next = self.critic(torch.as_tensor(self.encoder(np.array(next_obs), 0))).numpy().astype(np.float64)
         A = np.zeros(len(rews))
         carry = 0.0
         for t in range(len(rews) - 1, -1, -1):
-            if ends[t] == "terminated":  # the pole fell: nothing comes after
+            if ends[t] == "terminated" or (ends[t] == "truncated" and self.cfg.trunc_as_end):  # nothing comes after
                 nv, carry = 0.0, 0.0
             elif ends[t] in ("truncated", "cut"):  # the future exists: the critic estimates it
                 nv, carry = V_next[t], 0.0
@@ -203,7 +250,10 @@ class PPOSession:
     # ------------------------------------------------------------------ iterate
     def iterate(self, record: bool = True) -> dict:
         cfg = self.cfg
+        self.frac = frac = min(1.0, self.env_steps / cfg.total_steps) if cfg.total_steps else 0.0
+        lr_now = cfg.actor_lr * lr_factor(cfg, frac)
         X, acts, logp_old_l, rews, ends, next_obs, segments, finished = self._collect()
+        self.env_steps += len(acts)
         V, A, target = self._advantages(X, rews, ends, next_obs)
         Xb = torch.stack(X)
         Ab = torch.tensor(acts)
@@ -220,6 +270,7 @@ class PPOSession:
 
         mb = cfg.minibatch or n
         steps = 0
+        grad_norms: list[tuple[float, float]] = []  # joint optimiser: (actor, critic) gradient norm before clipping
         # the sign A has in the loss (with normalisation: relative to the batch mean)
         adv_sign = adv_all - adv_all.mean() if cfg.adv_norm else adv_all
         per_epoch = []
@@ -230,6 +281,25 @@ class PPOSession:
                 adv = adv_all[idx]
                 if cfg.adv_norm and len(idx) > 1:
                     adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+                    if cfg.adv_clip is not None:
+                        adv = adv.clamp(-cfg.adv_clip, cfg.adv_clip)
+                if cfg.joint_opt:
+                    # one loss, one optimiser, the gradient of both networks clipped together
+                    loss_v = 0.5 * (tgt_all[idx] - self.critic(Xb[idx])).pow(2).mean()
+                    logp = F.log_softmax(self.actor(Xb[idx]), -1)[torch.arange(len(idx)), Ab[idx]]
+                    loss_pi = actor_loss(logp, logp_old[idx], adv, cfg.clip, cfg.ratio)
+                    for group in self.opt.param_groups:
+                        group["lr"] = lr_now
+                    self.opt.zero_grad()
+                    (loss_pi + cfg.vf_coef * loss_v).backward()
+                    gn_actor = float(torch.norm(torch.stack([p.grad.norm() for p in self.actor.parameters()])))
+                    gn_critic = float(torch.norm(torch.stack([p.grad.norm() for p in self.critic.parameters()])))
+                    if cfg.max_grad_norm is not None:
+                        torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm)
+                    self.opt.step()
+                    grad_norms.append((gn_actor, gn_critic))
+                    steps += 1
+                    continue
                 # critic: regression to the fixed targets
                 v = self.critic(Xb[idx])
                 loss_v = 0.5 * (tgt_all[idx] - v).pow(2).mean()
@@ -263,6 +333,10 @@ class PPOSession:
             "finished_lengths": finished, "finished_terminated": self._finished_terminated,
             "finished_returns": self._finished_returns,
             "per_epoch": per_epoch,
+            "lam": self.lam, "lr": lr_now if cfg.joint_opt else None,
+            # the share of the joint gradient that is the critic's (before clipping)
+            "gn_actor": float(np.mean([g[0] for g in grad_norms])) if grad_norms else None,
+            "gn_critic": float(np.mean([g[1] for g in grad_norms])) if grad_norms else None,
         }
         return {
             "k": self.k, "summary": summary, "episodes": segments,

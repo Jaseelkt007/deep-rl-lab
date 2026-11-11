@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from rl.ppo import VARIANTS, PPOConfig, PPOSession, actor_loss
+from rl.ppo import VARIANTS, PPOConfig, PPOSession, actor_loss, lambda_at, lr_factor
 
 
 def test_clip_stops_the_push_beyond_the_trust_range():
@@ -92,3 +92,52 @@ def test_variants_are_valid_and_one_switch_apart():
     assert VARIANTS["ratio"] == {**VARIANTS["epochs"], "ratio": True}
     assert VARIANTS["clip"] == {**VARIANTS["ratio"], "clip": 0.2}
     assert VARIANTS["gae"] == {**VARIANTS["clip"], "gae_lambda": 0.95}
+
+
+def test_one_step_ppo_schedules():
+    cfg = PPOConfig(**VARIANTS["ppo_1step"])
+    assert lambda_at(cfg, 0.0) == pytest.approx(0.9)
+    assert lambda_at(cfg, 1.0) == pytest.approx(0.9 + (1 - 1 / np.cosh(3.0)) * 0.08)  # ≈ 0.972
+    assert lambda_at(PPOConfig(gae_lambda=0.95), 0.7) == 0.95  # no end value: λ stays fixed
+    assert [lr_factor(cfg, f) for f in (0.0, 0.5, 1.0, 2.0)] == pytest.approx([1.0, 0.5, 0.0, 0.0], abs=1e-12)
+    assert lr_factor(PPOConfig(), 0.5) == 1.0
+
+
+def test_one_step_ppo_is_a_plain_policy_gradient_step():
+    """One gradient step: r = 1 there, so clip(r)·A = r·A and the gradient is the plain −A·log π one."""
+    over = {**VARIANTS["ppo_1step"], "batch_steps": 300, "total_steps": 3000, "seed": 3}
+    a, b = PPOSession(PPOConfig(**over)), PPOSession(PPOConfig(**{**over, "ratio": False, "clip": None}))
+    ta, tb = a.iterate(), b.iterate()
+    assert ta["summary"]["grad_steps"] == 1
+    for pa, pb in zip([*a.actor.parameters(), *a.critic.parameters()], [*b.actor.parameters(), *b.critic.parameters()]):
+        torch.testing.assert_close(pa, pb)
+    s = ta["summary"]
+    assert s["lam"] == pytest.approx(0.9) and s["lr"] == pytest.approx(5e-4)  # the first batch: the start values
+    assert s["gn_actor"] > 0 and s["gn_critic"] > 0
+    a.iterate()  # second batch: 300 of 3000 steps done
+    assert a.lam == pytest.approx(lambda_at(a.cfg, 0.1)) and a.opt.param_groups[0]["lr"] == pytest.approx(5e-4 * lr_factor(a.cfg, 0.1))
+
+
+def test_joint_optimiser_clips_both_networks_together():
+    s = PPOSession(PPOConfig(**{**VARIANTS["ppo_1step"], "batch_steps": 200, "max_grad_norm": 1e-3, "lr_decay": "none"}))
+    before = [p.detach().clone() for p in s.params]
+    s.iterate()
+    # Adam's first step moves every weight by about lr whatever the gradient's size, so check the clipped
+    # gradient directly: its total norm over BOTH networks is the limit
+    total = float(torch.norm(torch.stack([p.grad.norm() for p in s.params])))
+    assert total == pytest.approx(1e-3, rel=1e-4)
+    assert any(not torch.equal(p, q) for p, q in zip(before, s.params))
+
+
+def test_time_limit_as_end_drops_the_bootstrap():
+    s = PPOSession(PPOConfig(seed=4))
+    X, acts, logp, rews, ends, nxt, segs, fin = s._collect()
+    ends = list(ends)
+    ends[-1] = "truncated"
+    _, A_boot, _ = s._advantages(X, rews, ends, nxt)
+    s.cfg.trunc_as_end = True
+    V, A_end, _ = s._advantages(X, rews, ends, nxt)
+    with torch.no_grad():
+        v_next = float(s.critic(torch.as_tensor(s.encoder(np.array(nxt[-1:]), 0)))[0])
+    assert A_end[-1] == pytest.approx(rews[-1] - V[-1], abs=1e-5)
+    assert A_boot[-1] == pytest.approx(rews[-1] + s.cfg.gamma * v_next - V[-1], abs=1e-5)
