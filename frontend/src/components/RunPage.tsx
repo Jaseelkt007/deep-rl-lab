@@ -1662,6 +1662,12 @@ const ONE_STEP_DIFF: [string, string, string][] = [
   ["starting weights", "PyTorch's default", "orthogonal: hidden ×√2, policy head ×0.01 (all actions start almost equally likely), value head ×1, biases 0"],
 ];
 
+const ONE_STEP_CAUSES: [string, string][] = [
+  ["Too few gradient steps for the learning rate.", "With one step per batch, Adam moves each weight by about one learning rate at most (here 5·10⁻⁴, falling to 0). A few hundred steps left the networks almost at their start; PPO takes 320 steps per batch."],
+  ["No batch size works with one step per batch.", "Large or whole-episode batches give variety but too few steps; 64-step batches give enough steps, but each is one stretch of one episode, so the updates are one-sided and noisy."],
+  ["The critic never learned, so the advantages carried little signal.", "Its small steps could not reach values of 10 to 100, counting the time limit as the end gave it contradictory targets, and its large gradient dominated the shared clip. With EV ≈ 0 the actor had only the next ~10 rewards to go on."],
+];
+
 const ONE_STEP_FINDINGS = [
   "One gradient step per batch makes the number of batches the limit. Adam moves each weight by about one learning rate per step at most, so 2,048-step batches (98 steps in 200k env steps, at most 5·10⁻⁴ each and falling to 0) left every weight within about 0.03 of its start. PPO's weights moved by 3 to 25.",
   "64-step batches give enough steps (3,125), but each batch is one stretch of one episode: the measured losses zigzag with the episode cycle, and every step pulls towards one part of the state space.",
@@ -1703,6 +1709,19 @@ function OneStepDiff() {
         near-uniform start, the most likely action can look trained while the policy is still close to random.
       </div>
       <div className="mt-3 border-t border-neutral-100 pt-2 text-[12px]">
+        <div className="mb-1 font-medium text-neutral-900">The three root causes</div>
+        <ol className="mb-3 list-decimal space-y-1 pl-5 text-neutral-700">
+          {ONE_STEP_CAUSES.map(([head, text]) => (
+            <li key={head}>
+              <b className="font-medium text-neutral-900">{head}</b> {text}
+            </li>
+          ))}
+        </ol>
+        <div className="mb-3 text-neutral-600">
+          <b className="font-medium text-neutral-900">Not a cause, but misleading:</b> the near-uniform start (policy head ×0.01)
+          made a barely moved policy look 50/50, and with 50/50 probabilities tiny differences decide the most likely action,
+          so some most-likely-action replays looked trained when they were not.
+        </div>
         <div className="mb-1 font-medium text-neutral-900">What the experiment showed (one seed per run)</div>
         <ul className="list-disc space-y-1 pl-5 text-neutral-700">
           {ONE_STEP_FINDINGS.map((f) => (
