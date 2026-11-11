@@ -19,6 +19,10 @@ to PPO. No web server needed.
               a cosine to 0, λ rising 0.9 → 0.98, advantages normalised over the batch and clipped to ±10,
               time limit = end of episode, orthogonal start (policy head ×0.01). Not a rung: compare it
               with batch_ac (1 step per 5 episodes too, but learning rates 0.01 / 0.03) and ppo.
+  the DQN ladder (rl/dqn.py; one Q-network, ε-greedy with ε 1.0 → 0.05 over the first 10%, Huber loss):
+    q_online  learn from each new transition right away (minibatch of 1), target from the same network
+    q_replay  + replay buffer: the last 100,000 transitions, 64 random ones every 4 steps (after 1,000)
+    dqn       + target network: a frozen copy for the target, refreshed every 1,000 env steps
 Every algorithm trains for the same --budget of environment steps (default 200,000).
 
 The LATEST run of each algorithm is saved in runs/cli/<algo>/ (double cart-pole: runs/double_cartpole/<algo>/),
@@ -100,6 +104,7 @@ import gymnasium as gym  # noqa: E402
 
 from rl.explain import ExplainSession, LearnConfig  # noqa: E402
 from rl.ppo import VARIANTS, PPOConfig, PPOSession  # noqa: E402
+from rl.dqn import DQN_VARIANTS, DQNConfig, DQNSession  # noqa: E402
 
 # The ladder: our batch actor-critic, then one more piece of PPO per rung.
 ALGOS = {
@@ -110,6 +115,10 @@ ALGOS = {
     "gae": "+ GAE λ = 0.95",
     "ppo": "PPO (2,048-step batches, minibatches of 64, advantage normalisation)",
     "ppo_1step": "PPO with 1 gradient step per batch (joint Adam, gradient clip 0.5, cosine lr, λ 0.9→0.98)",
+    # the DQN ladder (rl/dqn.py)
+    "q_online": "Q-learning with a network: learn from each new step (no replay, no target network)",
+    "q_replay": "+ replay buffer (100k, random minibatches of 64 every 4 steps)",
+    "dqn": "DQN: + target network (copied every 1,000 steps)",
 }
 
 
@@ -133,6 +142,13 @@ def make_session(algo: str, args):
                           critic_lr=pick(args.critic_lr, 0.03), gamma=args.gamma, optimizer=args.optimizer,
                           shaping=SPEC.shaping, env_kwargs=SPEC.env_kwargs)
         return ExplainSession(cfg), cfg.model_dump()
+    if algo in DQN_VARIANTS:
+        if args.batch is not None or args.batch_steps is not None:
+            raise SystemExit("--batch / --batch-steps size PPO batches; DQN has a replay buffer instead")
+        cfg = DQNConfig(**{**DQN_VARIANTS[algo], "env_id": SPEC.env_id, "seed": args.seed, "gamma": args.gamma,
+                           "hidden": pick(args.hidden, SPEC.hidden), "total_steps": args.budget, "shaping": SPEC.shaping,
+                           "env_kwargs": SPEC.env_kwargs, **({"lr": args.actor_lr} if args.actor_lr is not None else {})})
+        return DQNSession(cfg), cfg.model_dump()
     base = {**PPOConfig().model_dump(), **VARIANTS[algo]}
     if args.batch is not None and args.batch_steps is not None:
         raise SystemExit("--batch (episodes) and --batch-steps (steps) are two ways to size a batch: pass one")
@@ -607,7 +623,7 @@ def train(algo: str, args) -> None:
     print(f"untrained policy: eval {un_v:.0f}, succeeds {un_ok:.0%}   (budget {args.budget:,} env steps, hidden {hidden})\n")
     cols = ["iter", "ret", "env_steps", "Lv", "Lv_after", "rel", "corr", "Lpi", "H", "EV", "absA", "KL", "clip_frac", "agree", "p_good",
             "ce_good", "dir", "eval", "success", "eval_success", "score", "eval_score", "max_x", "true_err", "noise", "V_mean",
-            "Vtrue_mean", "lam", "lr", "gn_actor", "gn_critic"]
+            "Vtrue_mean", "lam", "lr", "gn_actor", "gn_critic", "eps", "buffer", "q_pred", "g_real"]
     print(f"{'iter':>4} {'ret':>6} {'Lv (before → after)':>22} {'rel':>5} {'corr':>5} {'Lpi':>8} {'H':>5} {'EV':>6} "
           f"{'|A|':>6} {'KL':>8} {'agree':>6} {'p_good':>6} {'ce_good':>7} {'dir':>5} {'eval':>5}")
 
@@ -684,7 +700,9 @@ def train(algo: str, args) -> None:
                              if SPEC.success_is_terminal else None),
                    "true_err": None, "noise": None, "V_mean": None, "Vtrue_mean": None,
                    # PPO sessions: λ and the learning rate of this batch; joint optimiser: gradient norms
-                   "lam": s.get("lam"), "lr": s.get("lr"), "gn_actor": s.get("gn_actor"), "gn_critic": s.get("gn_critic")}
+                   "lam": s.get("lam"), "lr": s.get("lr"), "gn_actor": s.get("gn_actor"), "gn_critic": s.get("gn_critic"),
+                   # DQN: ε, buffer size, and Q(s, a) next to the discounted return that really followed
+                   "eps": s.get("eps"), "buffer": s.get("buffer"), "q_pred": s.get("q_pred"), "g_real": s.get("g_real")}
             if it % args.eval_every == 0 or it == 1 or last:
                 row["eval"], row["eval_success"], row["eval_score"] = evaluate(lambda st: greedy_action(session, st))
             truth_line = ""
