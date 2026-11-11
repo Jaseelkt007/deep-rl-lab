@@ -235,7 +235,7 @@ class PotentialShaping(gym.Wrapper):
 def make_env(cfg: RunConfig) -> gym.Env:
     """gym.make with the configured time limit (TimeLimit sets truncated=True at the limit)."""
     max_steps = cfg.max_episode_steps or ENV_INFO[cfg.env_id].official_max_steps
-    env = gym.make(cfg.env_id, max_episode_steps=max_steps)
+    env = gym.make(cfg.env_id, max_episode_steps=max_steps, **cfg.env_kwargs)
     if cfg.shaping != "none":
         env = PotentialShaping(env, cfg.env_id, cfg.shaping, cfg.gamma, cfg.shaping_scale)
     return env

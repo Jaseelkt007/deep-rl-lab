@@ -42,6 +42,7 @@ class LearnConfig(BaseModel):
     critic_lr: float = Field(0.03, gt=0)
     gamma: float = Field(0.99, ge=0, le=1)
     shaping: Literal["none", "energy"] = "none"  # MountainCar only
+    env_kwargs: dict[str, float | bool] = Field(default_factory=dict)  # gym.make options (LunarLander wind, gravity)
     grid: int = Field(25, ge=5, le=60)
 
     def n_episodes(self) -> int:
@@ -65,7 +66,8 @@ class ExplainSession:
         torch.set_num_threads(1)
         torch.manual_seed(cfg.seed)
         self.cfg = cfg
-        self.run_cfg = RunConfig(env_id=cfg.env_id, gamma=cfg.gamma, shaping=cfg.shaping, seed=cfg.seed)
+        self.run_cfg = RunConfig(env_id=cfg.env_id, gamma=cfg.gamma, shaping=cfg.shaping, seed=cfg.seed,
+                                 env_kwargs=cfg.env_kwargs)
         self.info = ENV_INFO[cfg.env_id]
         self.env = make_env(self.run_cfg)
         self.encoder = ObsEncoder(self.run_cfg)

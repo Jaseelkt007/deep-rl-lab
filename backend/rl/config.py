@@ -17,6 +17,8 @@ class RunConfig(BaseModel):
     # --- task -------------------------------------------------------------
     env_id: EnvId = "MountainCar-v0"
     seed: int = 0
+    # options passed to gym.make, e.g. LunarLander's {"enable_wind": True, "wind_power": 15.0, "gravity": -10.0}
+    env_kwargs: dict[str, float | bool] = Field(default_factory=dict)
     num_episodes: int = Field(1000, ge=1)
 
     # --- plain one-step actor-critic ---------------------------------------
