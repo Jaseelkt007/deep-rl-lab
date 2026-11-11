@@ -9,7 +9,7 @@ from __future__ import annotations
 
 
 def play_greedy(env_id: str, env_kwargs: dict, actor_state: dict, hidden: int, n_actions: int, seed: int,
-                label: str, score_judged: bool) -> None:
+                label: str, score_judged: bool, title: str = "") -> None:
     import gymnasium as gym
     import torch
 
@@ -24,7 +24,11 @@ def play_greedy(env_id: str, env_kwargs: dict, actor_state: dict, hidden: int, n
     actor.load_state_dict(actor_state)
     actor.eval()
     env = gym.make(env_id, render_mode="human", **env_kwargs)
-    obs, _ = env.reset(seed=seed)
+    obs, _ = env.reset(seed=seed)  # the first frame opens the window
+    if title:
+        import pygame
+
+        pygame.display.set_caption(f"{title} · {label}")  # which run this window belongs to
     steps, score = 0, 0.0
     try:
         with torch.no_grad():

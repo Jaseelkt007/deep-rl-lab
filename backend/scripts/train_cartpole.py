@@ -243,6 +243,7 @@ def reference_action(state) -> int:
 
 
 _viewer = None  # the window process that is playing right now, if any
+CURRENT_ALGO = ""  # the algorithm being trained (for the window title)
 
 
 def show_window(session, label: str) -> None:
@@ -260,7 +261,7 @@ def show_window(session, label: str) -> None:
     _viewer = mp.get_context("spawn").Process(
         target=play_greedy, daemon=True,
         args=(SPEC.env_id, dict(SPEC.env_kwargs), state, session.cfg.hidden, SPEC.n_actions, 10_000, label,
-              SPEC.measure == "score"))
+              SPEC.measure == "score", f"{SPEC.title} · {CURRENT_ALGO}"))
     _viewer.start()
     print(f"     ↳ window opened for the policy at {label} (training goes on)")
 
@@ -540,6 +541,8 @@ def main() -> None:
 
 
 def train(algo: str, args) -> None:
+    global CURRENT_ALGO
+    CURRENT_ALGO = algo
     session, resolved = make_session(algo, args)
     out_dir = runs_dir() / SPEC.folder / algo  # the latest run of this algorithm in this environment
     shutil.rmtree(out_dir, ignore_errors=True)
