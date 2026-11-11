@@ -14,11 +14,11 @@ to PPO. No web server needed.
     clip      + clip: loss −min(r·A, clip(r, 1−ε, 1+ε)·A), ε = 0.2 (stops the push once r is past 1±ε)
     gae       + GAE λ = 0.95: A from the critic's one-step errors δ instead of G − V
     ppo       + 2,048-step batches, minibatches of 64, normalised advantages, lr 1e-3 / 3e-3
-    ppo_1step PPO with ONE gradient step per 2,048-step batch (so r = 1 and the clip never acts); one Adam for
+    ppo_1step (an experiment) PPO with ONE gradient step per 64-step batch (so r = 1 and the clip never acts); one Adam for
               both networks (loss L_π + 0.5·L_V, gradients clipped together to norm 0.5), lr 5e-4 falling along
               a cosine to 0, λ rising 0.9 → 0.98, advantages normalised over the batch and clipped to ±10,
               time limit = end of episode, orthogonal start (policy head ×0.01). Not a rung: compare it
-              with batch_ac (1 step) and ppo. Needs small batches to learn: --batch-steps 128 (or 32).
+              with batch_ac (1 step) and ppo. 2,048-step batches would give only 98 steps in 200k: it barely moves.
 Every algorithm trains for the same --budget of environment steps (default 200,000).
 
 The LATEST run of each algorithm is saved in runs/cli/<algo>/ (double cart-pole: runs/double_cartpole/<algo>/),
@@ -80,6 +80,7 @@ else left. It scores 500 (the maximum) on every start state, so it is optimal fo
 from __future__ import annotations
 
 import argparse
+import copy
 import math
 import csv
 import json
@@ -112,11 +113,12 @@ ALGOS = {
 }
 
 
-def resolve_every(args) -> None:
+def resolve_every(args, algo: str | None = None) -> None:
     """--eval-every / --record-every / --truth-every left unset: every 10 iterations, times 2,048 / batch size
-    for small step batches (32-step batches → every 640 iterations), so the number of evaluations, recordings
+    for small step batches (64-step batches → every 320 iterations), so the number of evaluations, recordings
     and critic checks stays about the same as with 2,048-step batches."""
-    scale = max(1, 2048 // args.batch_steps) if getattr(args, "batch_steps", None) else 1
+    batch = getattr(args, "batch_steps", None) or VARIANTS.get(algo or "", {}).get("batch_steps")
+    scale = max(1, 2048 // batch) if batch else 1
     for name in ("eval_every", "record_every", "truth_every"):
         if getattr(args, name) is None:
             setattr(args, name, 10 * scale)
@@ -508,8 +510,8 @@ def main() -> None:
     ap.add_argument("--iters", type=int, default=None, help="optional maximum number of iterations")
     ap.add_argument("--batch", type=int, default=None, help="episodes per batch (episode-batch algorithms)")
     ap.add_argument("--batch-steps", type=int, default=None,
-                    help="steps per batch (ppo, ppo_1step; default 2,048). With 1 gradient step per batch, smaller "
-                         "batches = more steps: 200k env steps in batches of 128 = 1,563 gradient steps")
+                    help="steps per batch (default: ppo 2,048, ppo_1step 64). With 1 gradient step per batch, smaller "
+                         "batches = more steps: 200k env steps in batches of 64 = 3,125 gradient steps")
     ap.add_argument("--hidden", type=int, default=None, help="hidden units (one hidden layer); default 8, LunarLander 64")
     ap.add_argument("--actor-lr", type=float, default=None, help="default: the algorithm's own")
     ap.add_argument("--critic-lr", type=float, default=None, help="default: the algorithm's own")
@@ -540,7 +542,6 @@ def main() -> None:
     ap.add_argument("--wind-power", type=float, default=None, help="lunarlander_wind: steady wind strength (default 15)")
     ap.add_argument("--turbulence", type=float, default=None, help="lunarlander_wind: random gusts (default 1.5)")
     args = ap.parse_args()
-    resolve_every(args)
     if args.render_every_steps == 0:  # 0 means no windows, not "fall back to --render-every"
         args.render_every = 0
     global SPEC
@@ -574,6 +575,8 @@ def main() -> None:
 def train(algo: str, args) -> None:
     global CURRENT_ALGO
     CURRENT_ALGO = algo
+    args = copy.copy(args)  # per algorithm (--algo all): the intervals depend on its batch size
+    resolve_every(args, algo)
     session, resolved = make_session(algo, args)
     out_dir = runs_dir() / SPEC.folder / algo  # the latest run of this algorithm in this environment
     shutil.rmtree(out_dir, ignore_errors=True)
