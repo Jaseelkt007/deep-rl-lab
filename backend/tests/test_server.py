@@ -139,3 +139,4 @@ def test_cli_endpoints_per_environment(client, tmp_path):
     assert client.get("/api/cli/algos?env=double_cartpole_joint").json() == []
     assert client.get("/api/cli/algos?env=mountaincar").json() == []
     assert client.get("/api/cli/algos?env=lunarlander").json() == []
+    assert client.get("/api/cli/algos?env=lunarlander_wind").json() == []
