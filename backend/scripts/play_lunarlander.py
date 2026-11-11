@@ -4,6 +4,8 @@
     uv run python scripts/play_lunarlander.py --policy heuristic     # Gymnasium's hand-written controller
     uv run python scripts/play_lunarlander.py --policy nothing       # no engine at all: it just falls
     uv run python scripts/play_lunarlander.py --fps 15 --print-every 10   # slow motion, the 8 numbers every 10 steps
+    uv run python scripts/play_lunarlander.py --policy heuristic --wind  # with wind and gusts (strength 15, gusts 1.5)
+    uv run python scripts/play_lunarlander.py --wind --wind-power 20 --turbulence 2 --gravity -5   # other settings
 
 Prints each episode's score (200 = solved) and how it ended: landed, crashed, flew away or time limit.
 """
@@ -37,9 +39,17 @@ def main() -> None:
     ap.add_argument("--fps", type=int, default=50, help="frames per second (50 = real time)")
     ap.add_argument("--print-every", type=int, default=0, help="print the 8 state numbers every N steps (0 = never)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--wind", action="store_true", help="turn on wind and random gusts (Gymnasium's own)")
+    ap.add_argument("--wind-power", type=float, default=15.0, help="steady wind strength (with --wind)")
+    ap.add_argument("--turbulence", type=float, default=1.5, help="random gusts (with --wind)")
+    ap.add_argument("--gravity", type=float, default=-10.0, help="gravity (−10 default, −5 = moon-like)")
     args = ap.parse_args()
 
-    env = gym.make("LunarLander-v3", render_mode="human")
+    kw = {"gravity": args.gravity}
+    if args.wind:
+        kw.update(enable_wind=True, wind_power=args.wind_power, turbulence_power=args.turbulence)
+    env = gym.make("LunarLander-v3", render_mode="human", **kw)
+    print(f"settings: {kw}")
     env.unwrapped.metadata["render_fps"] = args.fps
     rng = np.random.default_rng(args.seed)
     names = ("x", "y", "vx", "vy", "angle", "ang.vel", "leg L", "leg R")

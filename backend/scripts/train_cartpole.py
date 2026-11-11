@@ -113,10 +113,10 @@ def make_session(algo: str, args):
         cfg = LearnConfig(env_id=SPEC.env_id, seed=args.seed, batch_episodes=pick(args.batch, 5),
                           hidden=pick(args.hidden, SPEC.hidden), actor_lr=pick(args.actor_lr, 0.01),
                           critic_lr=pick(args.critic_lr, 0.03), gamma=args.gamma, optimizer=args.optimizer,
-                          shaping=SPEC.shaping)
+                          shaping=SPEC.shaping, env_kwargs=SPEC.env_kwargs)
         return ExplainSession(cfg), cfg.model_dump()
     base = {**PPOConfig().model_dump(), **VARIANTS[algo]}
-    cfg = PPOConfig(**{**base, "env_id": SPEC.env_id, "shaping": SPEC.shaping, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, SPEC.hidden),
+    cfg = PPOConfig(**{**base, "env_id": SPEC.env_id, "shaping": SPEC.shaping, "env_kwargs": SPEC.env_kwargs, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, SPEC.hidden),
                        "actor_lr": pick(args.actor_lr, base["actor_lr"]), "critic_lr": pick(args.critic_lr, base["critic_lr"]),
                        **({"batch_episodes": args.batch} if args.batch is not None and base["batch_episodes"] else {})})
     return PPOSession(cfg), cfg.model_dump()
@@ -141,7 +141,8 @@ class EnvSpec:
         self.measure = "length"  # what an episode is judged by: its length, or its score (return)
         self.can_set_state = True  # the ground-truth critic check needs to start rollouts in a given state
         self.budget, self.hidden = 200_000, 8  # defaults for --budget and --hidden
-        if key == "lunarlander":
+        self.env_kwargs: dict = {}  # gym.make options (LunarLander: wind, turbulence, gravity)
+        if key.startswith("lunarlander"):
             from gymnasium.envs.box2d.lunar_lander import heuristic
 
             class _Discrete:  # Gymnasium's heuristic only reads env.unwrapped.continuous
@@ -151,7 +152,10 @@ class EnvSpec:
                 def unwrapped(self):
                     return self
 
-            self.env_id, self.title, self.folder = "LunarLander-v3", "LunarLander", "lunarlander"
+            self.env_id, self.folder = "LunarLander-v3", key
+            self.title = "LunarLander + wind" if key == "lunarlander_wind" else "LunarLander"
+            if key == "lunarlander_wind":  # Gymnasium's own wind: a steady push + random gusts
+                self.env_kwargs = {"enable_wind": True, "wind_power": 15.0, "turbulence_power": 1.5}
             self.measure, self.n_actions, self.quality_steps = "score", 4, 1000
             self.can_set_state = False  # Box2D: terrain, legs and joints are not in the 8 numbers
             self.budget, self.hidden = 1_000_000, 64  # a harder task: more steps, a bigger network
@@ -211,7 +215,7 @@ class EnvSpec:
 
     def outcome(self, env, obs, terminated: bool) -> str | None:
         """How an episode ended, where the length does not say it (LunarLander)."""
-        if self.key != "lunarlander":
+        if not self.key.startswith("lunarlander"):
             return None
         u = env.unwrapped
         if not terminated:
@@ -248,7 +252,7 @@ def evaluate(policy, episodes: int = 10, render: bool = False) -> tuple[float, f
     """`policy(state) -> action` on fixed start states: (mean episode LENGTH, share that succeeded,
     mean SCORE = return with the official reward). CartPole: length = score (500 = perfect).
     MountainCar: length = steps to the flag (200 = never)."""
-    env = gym.make(SPEC.env_id, render_mode="human" if render else None)
+    env = gym.make(SPEC.env_id, render_mode="human" if render else None, **SPEC.env_kwargs)
     lengths, wins, scores = [], [], []
     for i in range(episodes):
         obs, _ = env.reset(seed=10_000 + i)
@@ -272,7 +276,7 @@ def record_episode(session: ExplainSession | None, it: int, folder: Path, name: 
     replays it) and frames as a GIF. session = None plays the hand-written good policy."""
     from PIL import Image
 
-    env = gym.make(SPEC.env_id, render_mode="rgb_array")
+    env = gym.make(SPEC.env_id, render_mode="rgb_array", **SPEC.env_kwargs)
     obs, _ = env.reset(seed=10_000)  # the same start as the first eval episode
     states, actions, probs, frames, good_actions = [], [], [], [], []
     score = 0.0
@@ -329,7 +333,7 @@ def quality_test(policy, starts: int = 20, max_steps: int = 10_000) -> dict:
     """The final policy, tested harder than training: up to `max_steps` (training stops at 500)
     from `starts` different start states. Survival, centering, calmness and action switching.
     MountainCar: 'survived' = reached the flag, and the curve = share that reached it by step t."""
-    env = gym.make(SPEC.env_id, max_episode_steps=max_steps)
+    env = gym.make(SPEC.env_id, max_episode_steps=max_steps, **SPEC.env_kwargs)
     lengths, abs_x, abs_th, ok, scores, outcomes = [], [], [], [], [], []
     switches = survived = fell_cart = fell_pole = 0
     for i in range(starts):
@@ -401,7 +405,7 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
 
     No time limit (the critic bootstraps at the 500-step cut, so it estimates the never-ending
     task); 600 steps cover it (0.99^600 ≈ 0.002). Returns (mean, std) per state."""
-    env = gym.make(SPEC.env_id).unwrapped  # no TimeLimit wrapper
+    env = gym.make(SPEC.env_id, **SPEC.env_kwargs).unwrapped  # no TimeLimit wrapper
     gen = torch.Generator().manual_seed(seed)
     g = session.cfg.gamma
     means, stds = [], []
@@ -431,20 +435,21 @@ def true_values(session: ExplainSession, states: list, rollouts: int = 10, horiz
 
 def web_page() -> str:
     return "http://localhost:3000" + {"cartpole": "", "double_cartpole": "/double", "mountaincar": "/mountaincar",
-                                      "mountaincar_energy": "/mountaincar-energy", "lunarlander": "/lunarlander"}.get(
+                                      "mountaincar_energy": "/mountaincar-energy", "lunarlander": "/lunarlander",
+                                      "lunarlander_wind": "/lunarlander-wind"}.get(
         SPEC.key, "/double-joint")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--env", choices=["cartpole", "double_cartpole", "double_cartpole_joint", "mountaincar", "mountaincar_energy",
-                                      "lunarlander"],
+                                      "lunarlander", "lunarlander_wind"],
                     default="cartpole",
                     help="cartpole (one stick), double_cartpole (two sticks on a free hinge, each ≤ 15° from "
                          "vertical), double_cartpole_joint (lower stick ≤ 30°, top stick bent ≤ 20° from it) "
                          "mountaincar (official MountainCar-v0: −1 per step, 200-step limit) or mountaincar_energy "
                          "(+ a bonus for gaining energy in training: 10·(γΦ(s′) − Φ(s))) or lunarlander (LunarLander-v3, "
-                         "judged by its score, 200 = solved)")
+                         "judged by its score, 200 = solved) or lunarlander_wind (the same with wind and turbulence)")
     ap.add_argument("--algo", choices=[*ALGOS, "all"], default="batch_ac",
                     help="batch_ac | epochs | ratio | clip | gae | ppo, or all of them one after another")
     ap.add_argument("--budget", type=int, default=None,
@@ -467,6 +472,9 @@ def main() -> None:
     ap.add_argument("--quality-steps", type=int, default=None,
                     help="length of the final-policy test (default: 10,000 for the cart-poles, 200 for MountainCar)")
     ap.add_argument("--quality-starts", type=int, default=20, help="start states in the final-policy test")
+    ap.add_argument("--gravity", type=float, default=None, help="LunarLander: gravity (default −10; −5 = moon-like)")
+    ap.add_argument("--wind-power", type=float, default=None, help="lunarlander_wind: steady wind strength (default 15)")
+    ap.add_argument("--turbulence", type=float, default=None, help="lunarlander_wind: random gusts (default 1.5)")
     args = ap.parse_args()
     global SPEC
     SPEC = EnvSpec(args.env)
@@ -474,6 +482,15 @@ def main() -> None:
         args.quality_steps = SPEC.quality_steps
     if args.budget is None:
         args.budget = SPEC.budget
+    if args.gravity is not None:
+        if not args.env.startswith("lunarlander"):
+            ap.error("--gravity is for the LunarLander environments")
+        SPEC.env_kwargs["gravity"] = args.gravity
+    for flag, key in (("wind_power", "wind_power"), ("turbulence", "turbulence_power")):
+        if getattr(args, flag) is not None:
+            if args.env != "lunarlander_wind":
+                ap.error(f"--{flag.replace('_', '-')} needs --env lunarlander_wind")
+            SPEC.env_kwargs[key] = getattr(args, flag)
     if not SPEC.can_set_state:
         args.truth_every = 0  # no ground-truth critic check (rollouts cannot start in a given state)
     if args.algo == "all":  # the whole ladder, one after another, no windows
