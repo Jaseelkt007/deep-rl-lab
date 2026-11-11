@@ -136,6 +136,8 @@ uv run python scripts/train_cartpole.py --env lunarlander --algo ppo --render-ev
 ```
 Runs: `runs/lunarlander/<algo>/`; page: **http://localhost:3000/lunarlander**.
 
+**With wind:** `--env lunarlander_wind` turns on Gymnasium's wind (a steady push of 15 that slowly changes direction) and random gusts (1.5) while the lander is in the air. The agent does not see them, only their effect on its speed. The hand-written controller drops from 241 (90% of starts ≥ 200) to 123 (54%). `--wind-power`, `--turbulence` and `--gravity` (also for plain `lunarlander`) change the settings; they are saved with the run and shown on the page (**/lunarlander-wind**). Watch first: `uv run python scripts/play_lunarlander.py --policy heuristic --wind`.
+
 ## Other scripts
 
 ```bash
