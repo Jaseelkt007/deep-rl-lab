@@ -497,9 +497,10 @@ def main() -> None:
     ap.add_argument("--render-every", type=int, default=25, help="show the current policy playing every N iterations (0 = never)")
     ap.add_argument("--render-blocking", action="store_true",
                     help="play the window inside the training process (training waits), as before")
-    ap.add_argument("--render-every-steps", type=int, default=0,
+    ap.add_argument("--render-every-steps", type=int, default=None,
                     help="instead: show it each time training passes another N environment steps, so every algorithm is "
-                         "shown at the same points (e.g. 100000 = 10 windows in 1M steps); replaces --render-every")
+                         "shown at the same points (e.g. 100000 = 10 windows in 1M steps); replaces --render-every. "
+                         "0 = no windows at all")
     ap.add_argument("--plot", action=argparse.BooleanOptionalAction, default=True,
                     help="plot to <run folder>/plot.png and open it at the end")
     ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
@@ -512,6 +513,8 @@ def main() -> None:
     ap.add_argument("--wind-power", type=float, default=None, help="lunarlander_wind: steady wind strength (default 15)")
     ap.add_argument("--turbulence", type=float, default=None, help="lunarlander_wind: random gusts (default 1.5)")
     args = ap.parse_args()
+    if args.render_every_steps == 0:  # 0 means no windows, not "fall back to --render-every"
+        args.render_every = 0
     global SPEC
     SPEC = EnvSpec(args.env)
     if args.quality_steps is None:
