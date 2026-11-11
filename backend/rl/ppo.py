@@ -23,14 +23,15 @@ One iteration:
 With epochs = 1, minibatch = whole batch, clip = None, λ = 1 and 5-episode batches this is
 the batch actor-critic of rl/explain.py.
 
-"ppo_1step" (an experiment) is PPO with ONE gradient step per 64-step batch: in that step r = 1, so the clip never acts and the
+"ppo_1step" (an experiment) is PPO with ONE gradient step per batch of 5 complete episodes: in that step r = 1, so the clip never acts and the
 step is a plain policy-gradient step, −A·log π. It also uses one Adam for both networks (loss L_π + 0.5·L_V,
 gradients clipped together to norm 0.5), a learning rate decaying along a cosine to 0, λ rising from 0.9
 towards 0.98, advantages normalised over the whole batch and clipped to ±10, the time limit counted as
 the end of an episode (no V after it), and orthogonal starting weights (policy head ×0.01).
 Adam moves each weight by at most about one learning rate per step, so with 2,048-step batches and a
-200k-step budget (98 steps of ≤ 5e-4) the networks barely leave their start; hence 64-step batches
-(200k steps → 3,125 gradient steps).
+200k-step budget (98 steps of ≤ 5e-4) the networks barely leave their start. 64-step batches give enough
+steps, but each is one stretch of one episode; whole episodes give variety but few steps (MountainCar:
+5 × 200 = 1,000 steps per batch → 200 steps in 200k). --batch N / --batch-steps N choose.
 """
 
 from __future__ import annotations
@@ -93,7 +94,7 @@ VARIANTS: dict[str, dict] = {
             "minibatch": 64, "adv_norm": True, "actor_lr": 1e-3, "critic_lr": 3e-3},
     # not a rung on the ladder: PPO with a single gradient step per batch, and its own optimiser settings
     "ppo_1step": {"epochs": 1, "ratio": True, "clip": 0.2, "gae_lambda": 0.9, "gae_lambda_end": 0.98,
-                  "batch_episodes": None, "batch_steps": 64, "minibatch": None, "adv_norm": True, "adv_clip": 10.0,
+                  "batch_episodes": 5, "batch_steps": None, "minibatch": None, "adv_norm": True, "adv_clip": 10.0,
                   "joint_opt": True, "vf_coef": 0.5, "max_grad_norm": 0.5, "adam_eps": 1e-5,
                   "actor_lr": 5e-4, "critic_lr": 5e-4, "lr_decay": "cosine", "trunc_as_end": True, "init": "orthogonal"},
 }

@@ -105,7 +105,7 @@ def test_one_step_ppo_schedules():
 
 def test_one_step_ppo_is_a_plain_policy_gradient_step():
     """One gradient step: r = 1 there, so clip(r)·A = r·A and the gradient is the plain −A·log π one."""
-    over = {**VARIANTS["ppo_1step"], "batch_steps": 300, "total_steps": 3000, "seed": 3}
+    over = {**VARIANTS["ppo_1step"], "batch_episodes": None, "batch_steps": 300, "total_steps": 3000, "seed": 3}
     a, b = PPOSession(PPOConfig(**over)), PPOSession(PPOConfig(**{**over, "ratio": False, "clip": None}))
     ta, tb = a.iterate(), b.iterate()
     assert ta["summary"]["grad_steps"] == 1
@@ -119,7 +119,7 @@ def test_one_step_ppo_is_a_plain_policy_gradient_step():
 
 
 def test_joint_optimiser_clips_both_networks_together():
-    s = PPOSession(PPOConfig(**{**VARIANTS["ppo_1step"], "batch_steps": 200, "max_grad_norm": 1e-3, "lr_decay": "none"}))
+    s = PPOSession(PPOConfig(**{**VARIANTS["ppo_1step"], "batch_episodes": None, "batch_steps": 200, "max_grad_norm": 1e-3, "lr_decay": "none"}))
     before = [p.detach().clone() for p in s.params]
     s.iterate()
     # Adam's first step moves every weight by about lr whatever the gradient's size, so check the clipped
