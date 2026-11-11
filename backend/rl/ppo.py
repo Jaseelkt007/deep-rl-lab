@@ -26,8 +26,10 @@ the batch actor-critic of rl/explain.py.
 "ppo_1step" is PPO with ONE gradient step per batch: in that step r = 1, so the clip never acts and the
 step is a plain policy-gradient step, −A·log π. It also uses one Adam for both networks (loss L_π + 0.5·L_V,
 gradients clipped together to norm 0.5), a learning rate decaying along a cosine to 0, λ rising from 0.9
-towards 0.98, advantages normalised over the whole batch and clipped to ±10, and the time limit counted as
-the end of an episode (no V after it).
+towards 0.98, advantages normalised over the whole batch and clipped to ±10, the time limit counted as
+the end of an episode (no V after it), and orthogonal starting weights (policy head ×0.01).
+Adam moves each weight by at most about one learning rate per step, so with 2,048-step batches and a
+200k-step budget (98 steps of ≤ 5e-4) the networks barely leave their start: use smaller batches.
 """
 
 from __future__ import annotations
@@ -75,6 +77,9 @@ class PPOConfig(BaseModel):
     gae_lambda_end: float | None = Field(None, ge=0, le=1)  # λ rises from gae_lambda towards this over the run
     adv_clip: float | None = Field(None, gt=0)  # after normalising: clip A to ±adv_clip
     trunc_as_end: bool = False  # the time limit counts as the end of the episode: no V after it
+    # starting weights. default: PyTorch's. orthogonal: hidden layers gain √2, policy head 0.01 (all actions
+    # start almost equally likely), value head 1.0, biases 0
+    init: Literal["default", "orthogonal"] = "default"
 
 
 # The ladder from our batch actor-critic to PPO: each rung adds one thing to the one before.
@@ -89,8 +94,15 @@ VARIANTS: dict[str, dict] = {
     "ppo_1step": {"epochs": 1, "ratio": True, "clip": 0.2, "gae_lambda": 0.9, "gae_lambda_end": 0.98,
                   "batch_episodes": None, "batch_steps": 2048, "minibatch": None, "adv_norm": True, "adv_clip": 10.0,
                   "joint_opt": True, "vf_coef": 0.5, "max_grad_norm": 0.5, "adam_eps": 1e-5,
-                  "actor_lr": 5e-4, "critic_lr": 5e-4, "lr_decay": "cosine", "trunc_as_end": True},
+                  "actor_lr": 5e-4, "critic_lr": 5e-4, "lr_decay": "cosine", "trunc_as_end": True, "init": "orthogonal"},
 }
+
+
+def orthogonal_init(net: torch.nn.Module, out_gain: float) -> None:
+    """Orthogonal weights (hidden layers gain √2, the output layer `out_gain`) and zero biases."""
+    for name, layer in net.linear_layers():
+        torch.nn.init.orthogonal_(layer.weight, gain=out_gain if name == "out" else math.sqrt(2))
+        torch.nn.init.zeros_(layer.bias)
 
 
 def lambda_at(cfg: PPOConfig, frac: float) -> float:
@@ -153,6 +165,9 @@ class PPOSession:
         n_actions = int(self.env.action_space.n)
         self.actor = Actor(self.encoder.dim, n_actions, (cfg.hidden,))
         self.critic = Critic(self.encoder.dim, (cfg.hidden,))
+        if cfg.init == "orthogonal":
+            orthogonal_init(self.actor, 0.01)
+            orthogonal_init(self.critic, 1.0)
         if cfg.joint_opt:
             self.params = [*self.actor.parameters(), *self.critic.parameters()]
             self.opt = torch.optim.Adam(self.params, lr=cfg.actor_lr, eps=cfg.adam_eps)

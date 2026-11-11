@@ -141,3 +141,14 @@ def test_time_limit_as_end_drops_the_bootstrap():
         v_next = float(s.critic(torch.as_tensor(s.encoder(np.array(nxt[-1:]), 0)))[0])
     assert A_end[-1] == pytest.approx(rews[-1] - V[-1], abs=1e-5)
     assert A_boot[-1] == pytest.approx(rews[-1] + s.cfg.gamma * v_next - V[-1], abs=1e-5)
+
+
+def test_orthogonal_start_is_an_almost_uniform_policy():
+    s = PPOSession(PPOConfig(**{**VARIANTS["ppo_1step"], "env_id": "LunarLander-v3", "hidden": 64}))
+    for _, layer in [*s.actor.linear_layers(), *s.critic.linear_layers()]:
+        assert torch.count_nonzero(layer.bias) == 0
+    w = s.actor.out.weight.detach()
+    torch.testing.assert_close(w @ w.T, 1e-4 * torch.eye(4), atol=1e-6, rtol=1e-4)  # orthogonal rows, gain 0.01
+    x = torch.as_tensor(s.encoder(np.array([s.obs]), 0))
+    with torch.no_grad():
+        assert float(torch.softmax(s.actor(x), -1).max()) < 0.26  # four actions, each close to 1/4
