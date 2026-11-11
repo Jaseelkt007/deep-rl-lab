@@ -225,8 +225,8 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; why: stri
     key: "ppo_1step",
     tab: "PPO, 1 step",
     name: "PPO with 1 gradient step per batch (This is an experimentation.)",
-    adds: "(This is an experimentation.) Not a rung: PPO's loss with ONE gradient step per 64-step batch, so r = 1 and the clip never acts; one Adam for both networks with the gradient clipped together; lr falling to 0; λ rising 0.9 → 0.97; orthogonal start",
-    why: "(This is an experimentation.) PPO's loss, GAE and critic target, but only one gradient step per 64-step batch, taken with the weights that collected it. There r = 1 exactly, so the clip never acts and the step is the plain −A·log π step of batch AC. Advantages are normalised over the batch and clipped to ±10. Actor and critic share one Adam (loss L_π + 0.5·L_V) and their gradients are clipped together to norm 0.5; the learning rate falls from 5·10⁻⁴ to 0 along a cosine, λ rises from 0.9 towards 0.98, the time limit counts as the end of an episode, and the networks start orthogonal with the policy head ×0.01. Small batches because Adam moves each weight by about one learning rate per step at most: 2,048-step batches would give only 98 steps in 200k env steps, and the networks would barely leave their start. The table on its page lists every difference from PPO.",
+    adds: "(This is an experimentation.) Not a rung: PPO's loss with ONE gradient step per batch of 5 complete episodes, so r = 1 and the clip never acts; one Adam for both networks with the gradient clipped together; lr falling to 0; λ rising 0.9 → 0.97; orthogonal start",
+    why: "(This is an experimentation.) PPO's loss, GAE and critic target, but only one gradient step per batch of 5 complete episodes (as in batch AC), taken with the weights that collected it. There r = 1 exactly, so the clip never acts and the step is the plain −A·log π step of batch AC. Advantages are normalised over the batch and clipped to ±10. Actor and critic share one Adam (loss L_π + 0.5·L_V) and their gradients are clipped together to norm 0.5; the learning rate falls from 5·10⁻⁴ to 0 along a cosine, λ rises from 0.9 towards 0.98, the time limit counts as the end of an episode, and the networks start orthogonal with the policy head ×0.01. Adam moves each weight by about one learning rate per step at most, so with few batches the networks barely leave their start: whole-episode batches give variety but few steps (MountainCar: 5 × 200 = 1,000 steps per batch, 200 steps in 200k env steps). The table on its page lists every difference from PPO.",
     color: "#1f8fb3",
   },
 ];
@@ -1651,7 +1651,7 @@ function InsideIteration({ data }: { data: RunData }) {
 
 /** What differs between our PPO and the one-step experiment, setting by setting. */
 const ONE_STEP_DIFF: [string, string, string][] = [
-  ["batch", "2,048 steps", "64 steps"],
+  ["batch", "2,048 steps (cut episodes continue in the next batch)", "5 complete episodes (--batch N)"],
   ["gradient steps per batch", "320 (10 epochs × 32 minibatches of 64)", "1, on the whole batch"],
   ["ratio r and clip", "after the first step r moves away from 1; the clip stops it past 0.8 / 1.2", "r = 1 in the only step, so the clip never acts: the step is the plain −A·log π"],
   ["GAE λ", "0.95, fixed", "rises from 0.9 towards 0.98 (about 0.97 at the end)"],
@@ -1687,9 +1687,10 @@ function OneStepDiff() {
         </tbody>
       </table>
       <div className="mt-2 text-[11.5px] text-neutral-500">
-        Same in both: the clipped loss, GAE, the critic target A + V_old, no entropy bonus, the network size and γ. Why 64-step
-        batches: Adam moves each weight by about one learning rate per step at most, so with 2,048-step batches (98 steps in
-        200k env steps) the networks barely leave their start. Judge it by the sampled episodes and the entropy: with a
+        Same in both: the clipped loss, GAE, the critic target A + V_old, no entropy bonus, the network size and γ. Adam moves each
+        weight by about one learning rate per step at most, so few batches mean little movement: whole episodes give
+        variety but few steps (MountainCar: 200 in 200k env steps; 64-step batches would give 3,125, each from one stretch
+        of one episode). Judge it by the sampled episodes and the entropy: with a
         near-uniform start, the most likely action can look trained while the policy is still close to random.
       </div>
     </Panel>
