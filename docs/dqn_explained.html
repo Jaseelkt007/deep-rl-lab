@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DQN from PPO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#ffffff; --soft:#f7f8fa; --soft2:#f1f3f6; --line:#e5e7eb; --line2:#d1d5db;
+  --ink:#111827; --ink2:#374151; --muted:#6b7280; --faint:#9ca3af;
+  --ppo:#6250d6; --ppo-soft:#efedfd; --dqn:#0d8a74; --dqn-soft:#e5f4f0;
+  --tgt:#c2410c; --tgt-soft:#fdf1e9; --pos:#15803d; --neg:#dc2626;
+  --a0:#9ca3af; --a1:#3b82f6; --a2:#ec4899; --a3:#f59e0b;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+header.hero{border-bottom:1px solid var(--line);background:linear-gradient(180deg,#fbfbfd,#fff)}
+header.hero .wrap{padding-top:56px;padding-bottom:40px}
+.kicker{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+h1{font-size:40px;line-height:1.15;margin:10px 0 14px;letter-spacing:-.02em}
+h1 .d{color:var(--dqn)} h1 .p{color:var(--ppo)}
+.lede{font-size:17px;color:var(--ink2);max-width:780px;margin:0}
+nav.toc{display:flex;flex-wrap:wrap;gap:6px;margin-top:26px}
+nav.toc a{font-size:12.5px;color:var(--ink2);text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:4px 11px;background:#fff}
+nav.toc a:hover{border-color:var(--ink2)}
+section{padding:56px 0 8px}
+.sh{display:flex;align-items:baseline;gap:12px;margin-bottom:6px}
+.num{font:600 12px var(--mono);color:#fff;background:var(--ink);border-radius:6px;padding:2px 7px;position:relative;top:-3px}
+h2{font-size:26px;margin:0;letter-spacing:-.01em}
+h3{font-size:17px;margin:22px 0 8px}
+p{margin:8px 0}
+.sub{color:var(--ink2);max-width:860px}
+.card{border:1px solid var(--line);border-radius:12px;background:#fff;padding:20px;margin-top:18px}
+.card.soft{background:var(--soft)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media (max-width:820px){.grid2,.grid3{grid-template-columns:1fr} h1{font-size:30px}}
+.tag{display:inline-block;font:600 11px var(--mono);letter-spacing:.04em;border-radius:5px;padding:1px 7px;vertical-align:1px}
+.tag.ppo{background:var(--ppo-soft);color:var(--ppo)} .tag.dqn{background:var(--dqn-soft);color:var(--dqn)} .tag.tgt{background:var(--tgt-soft);color:var(--tgt)}
+.bridge{border-left:3px solid var(--ink);background:var(--soft);border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0}
+.bridge b.h{display:block;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+.eq{font-family:var(--mono);font-size:13.5px;background:var(--soft2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow-x:auto;white-space:nowrap}
+code,.m{font-family:var(--mono);font-size:.9em}
+.btns{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+button.btn{font:500 12.5px Inter,system-ui,sans-serif;border:1px solid var(--line2);background:#fff;color:var(--ink);border-radius:7px;padding:5px 11px;cursor:pointer}
+button.btn:hover{border-color:var(--ink2)}
+button.btn.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.ctl{display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:12.5px;color:var(--ink2);margin-top:12px}
+.ctl label{display:flex;gap:8px;align-items:center}
+.ctl input[type=range]{width:130px;accent-color:var(--ink)}
+.stat{font-family:var(--mono);font-size:12.5px}
+.muted{color:var(--muted)} .small{font-size:12.5px}
+canvas{display:block;width:100%}
+table.t{border-collapse:collapse;width:100%;font-size:13.5px}
+table.t th{text-align:left;font-weight:600;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line2);padding:8px 10px}
+table.t td{border-bottom:1px solid var(--line);padding:9px 10px;vertical-align:top}
+table.t td:first-child{color:var(--ink2);font-weight:500;white-space:nowrap}
+.panel{font-size:13px;line-height:1.55}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-family:var(--mono);font-size:12.5px}
+.kv span:nth-child(odd){color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--ink2);margin-top:8px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-2px}
+.flow{stroke-dasharray:5 6;animation:dash 1.1s linear infinite}
+@keyframes dash{to{stroke-dashoffset:-22}}
+.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.bars{display:flex;flex-direction:column;gap:7px}
+.bar{display:grid;grid-template-columns:110px 1fr 64px;gap:10px;align-items:center;font-size:12.5px}
+.bar .track{height:14px;background:var(--soft2);border-radius:4px;position:relative;overflow:hidden}
+.bar .fill{position:absolute;top:0;bottom:0;left:0;border-radius:4px;transition:width .7s cubic-bezier(.2,.8,.2,1),left .7s cubic-bezier(.2,.8,.2,1),background .4s}
+.bar .val{font-family:var(--mono);text-align:right}
+.zero{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--ink2);transition:left .7s}
+.pill{font-size:11.5px;border-radius:999px;padding:2px 9px;border:1px solid var(--line);color:var(--ink2);background:#fff}
+.code{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:10px 0;overflow-x:auto}
+.code div{padding:0 14px;white-space:pre;border-left:3px solid transparent;transition:background .25s}
+.code div.hl-d{background:var(--dqn-soft);border-left-color:var(--dqn)}
+.code div.hl-p{background:var(--ppo-soft);border-left-color:var(--ppo)}
+.code .c{color:var(--faint)}
+.wg{display:grid;grid-template-columns:repeat(10,1fr);gap:3px;max-width:240px}
+.wg i{display:block;aspect-ratio:1;border-radius:2px;transition:background .25s}
+.netbox{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fff;transition:box-shadow .3s,border-color .3s}
+.netbox.flash{border-color:var(--tgt);box-shadow:0 0 0 4px var(--tgt-soft)}
+.progress{height:6px;background:var(--soft2);border-radius:3px;overflow:hidden;margin-top:10px}
+.progress i{display:block;height:100%;background:var(--tgt);width:0}
+footer{border-top:1px solid var(--line);margin-top:60px;padding:28px 0 60px;color:var(--muted);font-size:12.5px}
+ol.steps{padding-left:20px} ol.steps li{margin:6px 0}
+.note{font-size:12px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+
+<header class="hero"><div class="wrap">
+  <div class="kicker">Deep RL playground · learning notes</div>
+  <h1><span class="d">DQN</span>, explained from <span class="p">PPO</span></h1>
+  <p class="lede">You know PPO end to end: an actor and a critic, rollouts with the frozen π_old, GAE, a batch used for several epochs in minibatches, then thrown away. DQN keeps the critic's core idea (bootstrapped value targets), drops the actor entirely, and adds two new parts that make it work: a <b>replay buffer</b> and a <b>target network</b>. Every section below starts from the PPO piece you already know.</p>
+  <nav class="toc">
+    <a href="#s1">1 · Q instead of π and V</a><a href="#s2">2 · Q-learning on a grid</a><a href="#s3">3 · The DQN loss</a>
+    <a href="#s4">4 · Exploration</a><a href="#s5">5 · Replay buffer</a><a href="#s6">6 · Target network</a>
+    <a href="#s7">7 · The loop, side by side</a><a href="#s8">8 · Fixes → Rainbow</a><a href="#s9">9 · Settings</a>
+    <a href="#s10">10 · When to use which</a><a href="#s11">11 · Our ladder</a>
+  </nav>
+</div></header>
+
+<main class="wrap">
+
+<!-- ============================================================ 1 -->
+<section id="s1">
+  <div class="sh"><span class="num">1</span><h2>One network that scores every action</h2></div>
+  <p class="sub">PPO has two networks: the <span class="tag ppo">actor</span> says <i>what to do</i> (probabilities π(a|s)), the <span class="tag ppo">critic</span> says <i>how good this state is</i> (V(s)). DQN has one network with <b>one output per action</b>: Q(s, a), the return you expect if you take action a now and act well afterwards. There is no actor: the policy is simply "take the action with the largest Q".</p>
+
+  <div class="card">
+    <svg viewBox="0 0 1040 330" width="100%" role="img" aria-label="PPO actor and critic next to DQN's Q-network">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#6b7280"/></marker>
+      </defs>
+      <!-- PPO -->
+      <text x="20" y="26" font-size="13" font-weight="700" fill="#6250d6">PPO</text>
+      <rect x="20" y="120" width="110" height="64" rx="9" fill="#f7f8fa" stroke="#d1d5db"/>
+      <text x="75" y="148" text-anchor="middle" font-size="12.5" fill="#111827" font-weight="600">state s</text>
+      <text x="75" y="166" text-anchor="middle" font-size="11" fill="#6b7280">8 numbers</text>
+      <path d="M130 140 C170 140 170 85 205 85" class="flow" stroke="#6250d6" stroke-width="2" fill="none"/>
+      <path d="M130 164 C170 164 170 238 205 238" class="flow" stroke="#6250d6" stroke-width="2" fill="none"/>
+      <rect x="205" y="55" width="120" height="60" rx="9" fill="#efedfd" stroke="#6250d6"/>
+      <text x="265" y="81" text-anchor="middle" font-size="13" font-weight="600" fill="#6250d6">actor</text>
+      <text x="265" y="99" text-anchor="middle" font-size="11" fill="#6250d6">8 → 64 → 4</text>
+      <rect x="205" y="208" width="120" height="60" rx="9" fill="#efedfd" stroke="#6250d6"/>
+      <text x="265" y="234" text-anchor="middle" font-size="13" font-weight="600" fill="#6250d6">critic</text>
+      <text x="265" y="252" text-anchor="middle" font-size="11" fill="#6250d6">8 → 64 → 1</text>
+      <path d="M325 85 L360 85" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ar)"/>
+      <path d="M325 238 L360 238" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ar)"/>
+      <g font-size="11" fill="#374151">
+        <text x="366" y="52">softmax → π(a|s)</text>
+        <rect x="366" y="60" width="9" height="10" fill="#9ca3af"/><rect x="379" y="60" width="11" height="10" fill="#3b82f6"/><rect x="394" y="60" width="66" height="10" fill="#ec4899"/><rect x="464" y="60" width="9" height="10" fill="#f59e0b"/>
+        <text x="366" y="86">0.04 · 0.06 · 0.82 · 0.08</text>
+        <text x="366" y="104" fill="#6b7280">sample an action from it</text>
+        <text x="366" y="232">V(s) = 41.3</text>
+        <text x="366" y="250" fill="#6b7280">one number: how good is s</text>
+      </g>
+      <line x1="520" y1="20" x2="520" y2="310" stroke="#e5e7eb"/>
+      <!-- DQN -->
+      <text x="545" y="26" font-size="13" font-weight="700" fill="#0d8a74">DQN</text>
+      <rect x="545" y="120" width="110" height="64" rx="9" fill="#f7f8fa" stroke="#d1d5db"/>
+      <text x="600" y="148" text-anchor="middle" font-size="12.5" fill="#111827" font-weight="600">state s</text>
+      <text x="600" y="166" text-anchor="middle" font-size="11" fill="#6b7280">8 numbers</text>
+      <path d="M655 152 L705 152" class="flow" stroke="#0d8a74" stroke-width="2" fill="none"/>
+      <rect x="705" y="118" width="130" height="68" rx="9" fill="#e5f4f0" stroke="#0d8a74"/>
+      <text x="770" y="146" text-anchor="middle" font-size="13" font-weight="600" fill="#0d8a74">Q-network</text>
+      <text x="770" y="164" text-anchor="middle" font-size="11" fill="#0d8a74">8 → 64 → 64 → 4</text>
+      <g font-size="11.5" fill="#374151">
+        <path d="M835 135 L870 96" stroke="#6b7280" stroke-width="1.2" marker-end="url(#ar)"/><text x="876" y="98">Q(s, nothing) = 28.4</text>
+        <path d="M835 145 L870 126" stroke="#6b7280" stroke-width="1.2" marker-end="url(#ar)"/><text x="876" y="128">Q(s, left) = 31.0</text>
+        <path d="M835 160 L870 158" stroke="#0d8a74" stroke-width="2" marker-end="url(#ar)"/><text x="876" y="161" font-weight="700" fill="#0d8a74">Q(s, main) = 45.2 ← max</text>
+        <path d="M835 172 L870 190" stroke="#6b7280" stroke-width="1.2" marker-end="url(#ar)"/><text x="876" y="194">Q(s, right) = 33.7</text>
+      </g>
+      <text x="705" y="236" font-size="11.5" fill="#374151">policy: a = argmax<tspan baseline-shift="sub" font-size="9">a</tspan> Q(s, a) <tspan fill="#6b7280">(+ random with prob. ε)</tspan></text>
+      <text x="705" y="256" font-size="11.5" fill="#374151">no softmax, no probabilities, no actor</text>
+      <text x="705" y="290" font-size="11" fill="#6b7280">numbers are illustrative, for one LunarLander state</text>
+    </svg>
+  </div>
+
+  <h3>The bridge: PPO's advantage is Q − V</h3>
+  <p class="sub">In PPO you never computed Q, but you used it all the time: the advantage A(s, a) = Q(s, a) − V(s) says how much better action a is than the policy's average. PPO <i>estimates</i> A from what actually happened in the rollout (GAE). DQN <i>learns</i> Q for every action directly. Press the buttons to move between the two views of the same LunarLander state.</p>
+  <div class="card">
+    <div class="btns" id="br-btns">
+      <button class="btn on" data-v="ppo">PPO: π(a|s)</button>
+      <button class="btn" data-v="q">DQN: Q(s, a)</button>
+      <button class="btn" data-v="a">Q − V = advantage A(s, a)</button>
+    </div>
+    <div class="grid2" style="margin-top:16px;align-items:center">
+      <svg viewBox="0 0 300 200" width="100%" aria-label="LunarLander state">
+        <rect x="0" y="0" width="300" height="200" fill="#fbfbfd"/>
+        <path d="M0 175 L60 168 L110 178 L190 178 L240 165 L300 172 L300 200 L0 200z" fill="#e5e7eb"/>
+        <line x1="110" y1="178" x2="110" y2="150" stroke="#6b7280"/><path d="M110 150 l14 4 l-14 4z" fill="#f59e0b"/>
+        <line x1="190" y1="178" x2="190" y2="150" stroke="#6b7280"/><path d="M190 150 l14 4 l-14 4z" fill="#f59e0b"/>
+        <g transform="translate(160 78) rotate(5)">
+          <path d="M-14 -10 L14 -10 L18 6 L-18 6z" fill="#6250d6"/>
+          <line x1="-14" y1="6" x2="-22" y2="20" stroke="#374151" stroke-width="2"/><line x1="14" y1="6" x2="22" y2="20" stroke="#374151" stroke-width="2"/>
+          <path d="M-6 6 L0 26 L6 6z" fill="#ec4899" class="pulse"/>
+        </g>
+      </svg>
+      <div>
+        <div class="small muted" style="margin-bottom:10px;font-family:var(--mono)">x 0.12 · y 0.55 · vx −0.05 · vy −0.42 · angle 0.08 · legs 0 0 — falling fast, a little right of the pad</div>
+        <div class="bars" id="br-bars"></div>
+        <div class="panel muted" id="br-text" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </div>
+  <div class="bridge"><b class="h">PPO → DQN, in one line each</b>
+    actor π(a|s) → <b>gone</b>: the policy is argmax Q (plus ε-random actions).<br>
+    critic V(s) → <b>Q(s, a)</b>: one value per action, so actions can be compared without trying them.<br>
+    advantage from GAE → <b>Q(s, a) − max Q(s, ·)</b>, available for every action at once (section 8 makes it explicit with a "dueling" head).
+  </div>
+</section>
+
+<!-- ============================================================ 2 -->
+<section id="s2">
+  <div class="sh"><span class="num">2</span><h2>Q-learning, live on a small grid</h2></div>
+  <p class="sub">Before networks, the idea itself. Here Q is a <b>table</b>: four numbers per cell (up, right, down, left). The agent walks with ε-greedy actions; after every single step it nudges one number toward a target built from the next cell's best value. Each step costs −0.04, the green cell gives +1, the red cells −1 (both end the episode). Watch the green spread backwards from the goal: that is bootstrapping.</p>
+  <div class="card">
+    <div class="grid2" style="grid-template-columns:1.35fr 1fr">
+      <div>
+        <canvas id="gw" style="height:360px"></canvas>
+        <div class="legend"><span><i style="background:#15803d"></i>Q &gt; 0</span><span><i style="background:#dc2626"></i>Q &lt; 0</span><span><i style="background:#0d8a74;border-radius:50%"></i>agent</span><span>arrow = argmax action (the greedy policy)</span></div>
+      </div>
+      <div class="panel">
+        <div class="btns">
+          <button class="btn on" id="gw-play">Pause</button>
+          <button class="btn" id="gw-step">Step</button>
+          <button class="btn" id="gw-fast">Train 300 episodes</button>
+          <button class="btn" id="gw-reset">Reset</button>
+        </div>
+        <div class="ctl">
+          <label>ε <input type="range" id="gw-eps" min="0" max="1" step="0.05" value="0.2"><span class="stat" id="gw-eps-v">0.20</span></label>
+          <label>speed <input type="range" id="gw-speed" min="1" max="60" step="1" value="12"><span class="stat" id="gw-speed-v">12/s</span></label>
+        </div>
+        <h3 style="margin-top:16px">The last update</h3>
+        <div class="kv" id="gw-kv"></div>
+        <div class="eq" style="margin-top:12px;white-space:normal" id="gw-eq"></div>
+        <p class="small muted" id="gw-ep" style="margin-top:10px"></p>
+      </div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="bridge"><b class="h">Same shape as PPO's critic</b>
+      PPO's one-step error: <span class="m">δ = r + γ·V(s′) − V(s)</span><br>
+      Q-learning's error: <span class="m">δ = r + γ·<b>max<sub>a′</sub></b> Q(s′, a′) − Q(s, a)</span><br>
+      Two differences: a value per <i>action</i>, and a <b>max</b> over the next actions.
+    </div>
+    <div class="bridge"><b class="h">Why the max matters: off-policy</b>
+      PPO's critic learns V<sup>π</sup>, the value of <i>the current policy</i>, so its data must come from that policy. The max makes Q-learning learn Q*, the value of the <i>best</i> policy, whatever policy collected the step. That is what later allows a replay buffer full of old, random-ish experience.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 3 -->
+<section id="s3">
+  <div class="sh"><span class="num">3</span><h2>From a table to a network: the DQN loss</h2></div>
+  <p class="sub">LunarLander has continuous states, so a table is impossible: DQN replaces it with a network Q<sub>θ</sub>. The update becomes a regression, just like PPO's critic: compute a target y, then take a gradient step on (Q<sub>θ</sub>(s, a) − y)². Only the output of the action that was actually taken has an error; the other three outputs get no gradient from this transition. Change the inputs and watch the target and the error.</p>
+  <div class="card">
+    <div class="grid2" style="grid-template-columns:1fr 1.15fr">
+      <div class="panel">
+        <div class="small muted">action that was taken in s</div>
+        <div class="btns" id="td-act" style="margin:6px 0 12px"></div>
+        <div class="ctl" style="margin-top:0;flex-direction:column;align-items:flex-start;gap:8px">
+          <label>reward r <input type="range" id="td-r" min="-10" max="12" step="0.1" value="10"><span class="stat" id="td-r-v"></span></label>
+          <label>γ <input type="range" id="td-g" min="0.9" max="0.999" step="0.001" value="0.99"><span class="stat" id="td-g-v"></span></label>
+          <label><input type="checkbox" id="td-done"> the episode ended at s′ (landed or crashed): no bootstrap</label>
+          <span class="note" style="margin:0">default r = +10: a leg touched the ground on this step, a better outcome than the network expected</span>
+        </div>
+        <div class="small muted" style="margin-top:12px">target network's values at the next state s′</div>
+        <div class="bars" id="td-next" style="margin-top:6px"></div>
+      </div>
+      <div class="panel">
+        <div class="small muted">online network Q<sub>θ</sub>(s, ·) and the target y for the taken action</div>
+        <canvas id="td-cv" style="height:220px;margin-top:6px"></canvas>
+        <div class="eq" id="td-eq" style="margin-top:10px;white-space:normal;line-height:1.8"></div>
+      </div>
+    </div>
+  </div>
+  <div class="card soft">
+    <table class="t">
+      <tr><th></th><th>PPO critic</th><th>DQN</th><th>PPO actor</th></tr>
+      <tr><td>predicts</td><td>V(s)</td><td>Q(s, a) for all a</td><td>π(a|s)</td></tr>
+      <tr><td>target</td><td><span class="m">A + V_old</span> (λ-return, real rewards of the policy's own path)</td><td><span class="m">r + γ·max Q<sub>θ⁻</sub>(s′, ·)</span> (one real reward, then the target network)</td><td>none: it follows the advantage's sign</td></tr>
+      <tr><td>loss</td><td><span class="m">½(target − V)²</span></td><td><span class="m">½(y − Q(s,a))²</span>, usually Huber (linear for big errors)</td><td><span class="m">−min(r·A, clip(r)·A)</span></td></tr>
+      <tr><td>computed</td><td>once per batch with V_old, fixed during the epochs</td><td>for every sampled minibatch, with the frozen target network θ⁻</td><td>per minibatch</td></tr>
+    </table>
+    <p class="note">DQN has no actor loss at all. Improving Q <i>is</i> improving the policy, because the policy reads Q.</p>
+  </div>
+</section>
+
+<!-- ============================================================ 4 -->
+<section id="s4">
+  <div class="sh"><span class="num">4</span><h2>Exploration: sampling π vs ε-greedy</h2></div>
+  <p class="sub">PPO explores because its policy is stochastic: it samples from π, and the entropy (temperature) controls how random that is. DQN's greedy policy is deterministic, so exploration is added from outside: with probability ε take a uniformly random action, otherwise the argmax. ε starts at 1 (fully random) and decays on a fixed schedule.</p>
+  <div class="card">
+    <div class="grid2">
+      <div>
+        <canvas id="eps-cv" style="height:200px"></canvas>
+        <div class="ctl"><label>training progress <input type="range" id="eps-prog" min="0" max="1" step="0.005" value="0.05"><span class="stat" id="eps-prog-v"></span></label><span class="stat" id="eps-val"></span></div>
+      </div>
+      <div class="panel">
+        <div class="small muted"><span class="tag dqn">DQN</span> last 60 decisions with this ε (Q = 28.4 / 31.0 / <b>45.2</b> / 33.7)</div>
+        <canvas id="eps-dqn" style="height:48px;margin:6px 0 14px"></canvas>
+        <div class="small muted"><span class="tag ppo">PPO</span> last 60 decisions sampled from π = 0.04 / 0.06 / <b>0.82</b> / 0.08</div>
+        <canvas id="eps-ppo" style="height:48px;margin-top:6px"></canvas>
+        <div class="legend"><span><i style="background:#9ca3af"></i>nothing</span><span><i style="background:#3b82f6"></i>left</span><span><i style="background:#ec4899"></i>main</span><span><i style="background:#f59e0b"></i>right</span><span>outlined = random (ε) pick</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="grid3">
+    <div class="bridge"><b class="h">Who decides how random</b>PPO: the learning itself (entropy falls as π sharpens). DQN: a schedule you choose (ε from 1.0 to 0.05 over, say, the first 10% of training).</div>
+    <div class="bridge"><b class="h">What is random</b>PPO's exploration prefers good actions (it samples in proportion to π). ε-greedy picks the worst action as often as the second best.</div>
+    <div class="bridge"><b class="h">At test time</b>Both act greedily: argmax π for PPO, argmax Q for DQN (ε = 0 or a small 0.01).</div>
+  </div>
+</section>
+
+<!-- ============================================================ 5 -->
+<section id="s5">
+  <div class="sh"><span class="num">5</span><h2>The replay buffer: DQN's version of "batch + epochs"</h2></div>
+  <p class="sub">In PPO a batch is played by π_old, used for K epochs in minibatches, then <b>thrown away</b>: after the update it no longer comes from the current policy, and PPO's gradient needs data from (nearly) the current policy. DQN's max target does not care who collected the data, so it <b>keeps</b> the last N transitions (s, a, r, s′, done) in a buffer and trains on random minibatches from it, a little after every environment step. Below, an agent drives MountainCar (left: its states, position × velocity); compare three ways of building the minibatch of 8 that each gradient step sees.</p>
+  <div class="card">
+    <div class="btns" id="rb-mode">
+      <button class="btn" data-m="consec">No replay: the last 8 steps</button>
+      <button class="btn" data-m="ppo">PPO: batch of 48 → 4 epochs → discard</button>
+      <button class="btn on" data-m="dqn">DQN: buffer of 120, random 8</button>
+      <span style="flex:1"></span>
+      <button class="btn" id="rb-play">Pause</button>
+    </div>
+    <div class="grid2" style="grid-template-columns:1.25fr 1fr;margin-top:14px">
+      <div><canvas id="rb-state" style="height:300px"></canvas>
+        <div class="legend"><span><i style="background:#cbd5e1"></i>stored experience (colour = episode)</span><span><i style="background:#fff;border:2px solid #111827"></i>the current minibatch</span><span><i style="background:#0d8a74;border-radius:50%"></i>the car now</span></div></div>
+      <div><canvas id="rb-ring" style="height:300px"></canvas></div>
+    </div>
+    <div class="grid3" style="margin-top:12px">
+      <div class="panel"><div class="small muted">variety of the minibatch (its spread ÷ the spread of all recent states)</div><canvas id="rb-spread" style="height:22px;margin-top:6px"></canvas><div class="stat" id="rb-spread-v"></div></div>
+      <div class="panel"><div class="small muted">average age of the experience it learns from</div><div class="stat" id="rb-age" style="font-size:20px;margin-top:4px"></div></div>
+      <div class="panel"><div class="small muted">counters</div><div class="kv" id="rb-kv" style="margin-top:4px"></div></div>
+    </div>
+    <div class="ctl"><label>env steps per second <input type="range" id="rb-speed" min="2" max="60" value="16"><span class="stat" id="rb-speed-v"></span></label></div>
+  </div>
+  <div class="grid3">
+    <div class="bridge"><b class="h">1 · It breaks correlation</b>Consecutive steps are almost the same state. A minibatch of them pulls every gradient step toward one small region, exactly what we saw with 64-step batches in the one-step PPO experiment (the zigzag plots). Random samples from a large buffer look like the whole state space.</div>
+    <div class="bridge"><b class="h">2 · It reuses experience</b>PPO reuses a batch K times (epochs) and then forgets it. DQN reuses each transition across many updates for as long as it stays in the buffer: the <i>replay ratio</i> (gradient samples ÷ new transitions) plays the role of PPO's epochs.</div>
+    <div class="bridge"><b class="h">3 · It is only allowed off-policy</b>The data in the buffer came from older, more random policies (look at the age). The max target learns Q* anyway. PPO cannot do this: its ratio π/π_old corrects only small differences, and the clip forbids large ones.</div>
+  </div>
+</section>
+
+<!-- ============================================================ 6 -->
+<section id="s6">
+  <div class="sh"><span class="num">6</span><h2>The target network: freeze what the target is made of</h2></div>
+  <p class="sub">The target y = r + γ·max Q(s′, ·) is computed with the same kind of network that is being trained. Every gradient step changes all of Q, including Q(s′, ·), so the target moves while you chase it, and with generalisation across states the errors can feed on themselves. DQN keeps a second copy, the <b>target network θ⁻</b>, that is only used to compute y and is refreshed every C steps (or slowly, θ⁻ ← τθ + (1−τ)θ⁻).</p>
+  <div class="card">
+    <div class="grid2" style="grid-template-columns:1fr 1.5fr;align-items:start">
+      <div>
+        <div class="netbox"><div class="small"><span class="tag dqn">online θ</span> trained every step, picks the actions</div><div class="wg" id="tn-online" style="margin-top:10px"></div></div>
+        <div style="text-align:center;font-size:12px;color:var(--muted);margin:8px 0" id="tn-copy">copy θ → θ⁻ every 100 steps</div>
+        <div class="netbox" id="tn-tbox"><div class="small"><span class="tag tgt">target θ⁻</span> frozen, only computes y</div><div class="wg" id="tn-target" style="margin-top:10px"></div><div class="progress"><i id="tn-prog"></i></div></div>
+      </div>
+      <div>
+        <canvas id="tn-cv" style="height:300px"></canvas>
+        <p class="note">Toy simulation of one Q-value. Its next-state value Q(s′) also shifts as the network learns other states (random drift). Top: the target uses the live network, so it moves every step and the prediction chases it. Bottom: the target uses the frozen copy, so for 100 steps it is a fixed regression target. Both start at the true value. The price: new information reaches the target only at the next copy, so a target network also slows learning a little; C trades stability for speed.</p>
+      </div>
+    </div>
+  </div>
+  <div class="bridge"><b class="h">You have seen this idea in PPO</b>
+    PPO computes its advantages and critic targets <b>once per batch</b> with V_old, and keeps them fixed for all 10 epochs, even though the critic changes after every minibatch. That is a target network with C = one batch. DQN needs an explicit copy only because it never stops to collect a batch: it updates after every step, so "the critic before the update" has to be stored somewhere.
+  </div>
+</section>
+
+<!-- ============================================================ 7 -->
+<section id="s7">
+  <div class="sh"><span class="num">7</span><h2>The training loop, side by side</h2></div>
+  <p class="sub">PPO alternates two phases: play, then learn. DQN interleaves them: every environment step adds one transition and (every few steps) takes one gradient step. The timeline shows when each algorithm touches the environment and when it updates (scaled down).</p>
+  <div class="card">
+    <div class="grid2">
+      <div><div class="small" style="margin-bottom:6px"><span class="tag dqn">DQN</span></div><div class="code" id="lp-dqn"></div></div>
+      <div><div class="small" style="margin-bottom:6px"><span class="tag ppo">PPO</span></div><div class="code" id="lp-ppo"></div></div>
+    </div>
+    <canvas id="lp-cv" style="height:170px;margin-top:16px"></canvas>
+    <div class="legend"><span><i style="background:#94a3b8"></i>environment step</span><span><i style="background:#0d8a74"></i>DQN gradient step</span><span><i style="background:#6250d6"></i>PPO gradient step</span><span><i style="background:#c2410c"></i>target copy θ⁻ ← θ</span><span><i style="background:#dc2626"></i>PPO discards the batch</span></div>
+  </div>
+  <div class="card soft">
+    <table class="t">
+      <tr><th>PPO</th><th>DQN equivalent</th><th>what changes</th></tr>
+      <tr><td>batch of 2,048 fresh steps</td><td>replay buffer, e.g. the last 100,000 steps</td><td>old experience stays useful</td></tr>
+      <tr><td>10 epochs</td><td>replay ratio: each transition is sampled ~ (batch × updates) ÷ new steps times</td><td>reuse is continuous, not per batch</td></tr>
+      <tr><td>minibatch of 64, shuffled</td><td>minibatch of 32–256, sampled at random from the buffer</td><td>same role: one gradient step's data</td></tr>
+      <tr><td>V_old frozen during the update</td><td>target network θ⁻, copied every C steps</td><td>explicit second network</td></tr>
+      <tr><td>importance ratio π/π_old + clip</td><td>not needed: the max target is off-policy</td><td>no trust region; Huber loss and gradient clipping for stability</td></tr>
+      <tr><td>GAE λ</td><td>n-step returns (section 8)</td><td>bias / variance trade-off, same idea</td></tr>
+      <tr><td>entropy, sampling π</td><td>ε-greedy schedule</td><td>exploration is external</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ============================================================ 8 -->
+<section id="s8">
+  <div class="sh"><span class="num">8</span><h2>Where plain DQN goes wrong, and the fixes that became Rainbow</h2></div>
+  <p class="sub">The 2015 DQN (replay + target network) works, but it has known weaknesses. Each fix below is one idea; Rainbow (2017) combines six of them. Our final step uses the four that matter most at LunarLander's size.</p>
+
+  <h3>8a · Overestimation, and Double DQN</h3>
+  <p class="sub">The target takes a <b>max over noisy estimates</b>. Even if every action is truly worth 0, the largest of four noisy guesses is usually above 0, so targets are biased upward, and the bias is copied backwards through bootstrapping. Double DQN separates choosing from scoring: the online network picks a′ = argmax Q<sub>θ</sub>(s′, ·), the target network scores it, Q<sub>θ⁻</sub>(s′, a′). Their noise is (mostly) independent, so the bias disappears. Draw samples and watch the running averages.</p>
+  <div class="card">
+    <div class="grid2">
+      <div><canvas id="ov-cv" style="height:230px"></canvas></div>
+      <div class="panel">
+        <div class="btns"><button class="btn" id="ov-one">Draw once</button><button class="btn" id="ov-many">Draw 2,000</button><button class="btn" id="ov-reset">Reset averages</button></div>
+        <div class="ctl"><label>actions <input type="range" id="ov-k" min="2" max="10" value="4"><span class="stat" id="ov-k-v"></span></label><label>noise σ <input type="range" id="ov-s" min="0.1" max="3" step="0.1" value="1"><span class="stat" id="ov-s-v"></span></label></div>
+        <div class="kv" id="ov-kv" style="margin-top:14px"></div>
+        <p class="note">True value of every action: 0. "DQN target" = max of one set of noisy estimates; "Double DQN" = choose with set A, score with an independent set B.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>8b · Dueling heads: V and A inside Q</h3>
+  <p class="sub">The network splits after its shared layers into a <b>value head V(s)</b> and an <b>advantage head A(s, a)</b>, then recombines them. This is literally PPO's critic and PPO's advantage, learned inside one network. It helps because V is learned from every transition, even in states where the action barely matters (high in the sky, every action is similar).</p>
+  <div class="card">
+    <svg viewBox="0 0 1000 200" width="100%" aria-label="Dueling network">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#6b7280"/></marker></defs>
+      <rect x="10" y="70" width="110" height="56" rx="9" fill="#f7f8fa" stroke="#d1d5db"/><text x="65" y="103" text-anchor="middle" font-size="12.5" font-weight="600">state s</text>
+      <path d="M120 98 L170 98" class="flow" stroke="#0d8a74" stroke-width="2"/>
+      <rect x="170" y="66" width="150" height="64" rx="9" fill="#e5f4f0" stroke="#0d8a74"/><text x="245" y="95" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0d8a74">shared layers</text><text x="245" y="113" text-anchor="middle" font-size="11" fill="#0d8a74">8 → 64 → 64</text>
+      <path d="M320 86 C360 86 360 45 400 45" class="flow" stroke="#0d8a74" stroke-width="2" fill="none"/>
+      <path d="M320 110 C360 110 360 152 400 152" class="flow" stroke="#0d8a74" stroke-width="2" fill="none"/>
+      <rect x="400" y="20" width="170" height="50" rx="9" fill="#efedfd" stroke="#6250d6"/><text x="485" y="42" text-anchor="middle" font-size="12.5" font-weight="600" fill="#6250d6">value head V(s)</text><text x="485" y="59" text-anchor="middle" font-size="10.5" fill="#6250d6">= PPO's critic</text>
+      <rect x="400" y="127" width="170" height="50" rx="9" fill="#efedfd" stroke="#6250d6"/><text x="485" y="149" text-anchor="middle" font-size="12.5" font-weight="600" fill="#6250d6">advantage head A(s, ·)</text><text x="485" y="166" text-anchor="middle" font-size="10.5" fill="#6250d6">= PPO's advantage, per action</text>
+      <path d="M570 45 C620 45 620 92 660 92" stroke="#6b7280" stroke-width="1.5" fill="none" marker-end="url(#ar2)"/>
+      <path d="M570 152 C620 152 620 104 660 104" stroke="#6b7280" stroke-width="1.5" fill="none" marker-end="url(#ar2)"/>
+      <rect x="660" y="72" width="320" height="52" rx="9" fill="#fff" stroke="#111827"/>
+      <text x="820" y="96" text-anchor="middle" font-size="13" font-family="JetBrains Mono, monospace">Q(s,a) = V(s) + A(s,a) − mean A(s,·)</text>
+      <text x="820" y="114" text-anchor="middle" font-size="10.5" fill="#6b7280">subtracting the mean makes V and A unique (else V+c, A−c give the same Q)</text>
+    </svg>
+  </div>
+
+  <h3>8c · n-step returns: DQN's version of GAE</h3>
+  <p class="sub">A one-step target trusts the network after a single real reward; Monte Carlo trusts only real rewards. PPO solved this with GAE's λ, an exponentially weighted mix of all k-step lookaheads. DQN variants use one fixed n: <span class="m">y = r<sub>t</sub> + γr<sub>t+1</sub> + … + γ<sup>n−1</sup>r<sub>t+n−1</sub> + γ<sup>n</sup>·max Q<sub>θ⁻</sub>(s<sub>t+n</sub>, ·)</span>. Rainbow uses n = 3.</p>
+  <div class="card">
+    <div class="ctl" style="margin-top:0"><label>n (DQN) <input type="range" id="ns-n" min="1" max="20" value="3"><span class="stat" id="ns-n-v"></span></label><label>λ (PPO's GAE) <input type="range" id="ns-l" min="0" max="0.99" step="0.01" value="0.95"><span class="stat" id="ns-l-v"></span></label></div>
+    <canvas id="ns-cv" style="height:220px;margin-top:10px"></canvas>
+    <p class="note">Bars: how much weight each k-step lookahead gets in the target. n-step puts all of it on k = n; GAE spreads it as (1 − λ)λ<sup>k−1</sup> (mean lookahead 1/(1 − λ)). One catch for DQN: the n rewards in the buffer were earned by an older, ε-greedy policy, so n-step targets are slightly off-policy; small n keeps that harmless.</p>
+  </div>
+
+  <h3>8d · Prioritized replay, and the other two Rainbow parts</h3>
+  <div class="grid3">
+    <div class="card" style="margin-top:8px"><b>Prioritized replay</b><p class="small">Sample transitions in proportion to their last |TD error|<sup>α</sup> instead of uniformly: the surprising ones are replayed more. Because that changes the data distribution, each sample's loss is weighted by <span class="m">(N·P(i))<sup>−β</sup></span>, an importance weight, the same correction idea as PPO's ratio π/π_old.</p></div>
+    <div class="card" style="margin-top:8px"><b>Distributional (C51)</b><p class="small">Learn the whole distribution of returns (51 bins) instead of only its mean Q. A richer target that often learns faster on Atari; heavier to implement. Left for later.</p></div>
+    <div class="card" style="margin-top:8px"><b>Noisy networks</b><p class="small">Replace ε-greedy with learned noise in the weights, so the amount of exploration is learned per state, closer to how PPO's entropy works. Left for later.</p></div>
+  </div>
+</section>
+
+<!-- ============================================================ 9 -->
+<section id="s9">
+  <div class="sh"><span class="num">9</span><h2>The settings, side by side (LunarLander-sized)</h2></div>
+  <div class="card">
+    <table class="t">
+      <tr><th>setting</th><th><span class="tag ppo">PPO</span> (our runs)</th><th><span class="tag dqn">DQN</span> (typical starting point)</th><th>why it matters</th></tr>
+      <tr><td>networks</td><td>actor 8→64→4, critic 8→64→1</td><td>Q 8→64→64→4 (or 128s), plus a target copy</td><td>one network, two copies</td></tr>
+      <tr><td>data per update</td><td>batch 2,048 fresh steps</td><td>buffer 50k–100k steps, minibatch 64–128</td><td>off-policy reuse</td></tr>
+      <tr><td>updates</td><td>10 epochs × 32 minibatches per batch</td><td>1 gradient step every 1–4 env steps</td><td>continuous learning</td></tr>
+      <tr><td>learning starts</td><td>after the first batch</td><td>after 1k–10k random steps fill the buffer</td><td>a nearly empty buffer is correlated</td></tr>
+      <tr><td>target</td><td>A + V_old with GAE λ = 0.95</td><td>r + γ max Q<sub>θ⁻</sub>, copy every 250–1,000 updates (or τ = 0.005)</td><td>stability</td></tr>
+      <tr><td>exploration</td><td>sample π (entropy)</td><td>ε: 1.0 → 0.05 over the first ~10–20%</td><td>external schedule</td></tr>
+      <tr><td>loss / stability</td><td>clip ε = 0.2</td><td>Huber loss, gradient-norm clip ~10</td><td>no trust region in DQN</td></tr>
+      <tr><td>learning rate</td><td>1e-3 / 3e-3</td><td>~1e-4 to 6e-4</td><td>DQN is more sensitive to it</td></tr>
+      <tr><td>γ</td><td>0.99</td><td>0.99</td><td>same problem, same horizon</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ============================================================ 10 -->
+<section id="s10">
+  <div class="sh"><span class="num">10</span><h2>When to use which</h2></div>
+  <div class="card">
+    <table class="t">
+      <tr><th></th><th><span class="tag dqn">DQN family</span></th><th><span class="tag ppo">PPO</span></th></tr>
+      <tr><td>actions</td><td><b>discrete only</b> (needs a max over actions)</td><td>discrete and continuous</td></tr>
+      <tr><td>data</td><td>off-policy: reuses old experience, can even learn from someone else's data</td><td>on-policy: needs fresh data from the current policy</td></tr>
+      <tr><td>sample efficiency</td><td>usually better (each step is replayed many times)</td><td>usually worse, but very parallel-friendly</td></tr>
+      <tr><td>cost per env step</td><td>higher (a gradient step every few env steps, memory for the buffer)</td><td>lower</td></tr>
+      <tr><td>stability</td><td>sensitive: overestimation, learning rate, target period</td><td>robust defaults (the clip)</td></tr>
+      <tr><td>policy</td><td>deterministic argmax</td><td>stochastic, with explicit probabilities</td></tr>
+      <tr><td>typical uses</td><td>Atari-style games, recommendation and ads, settings where interaction is expensive or logged data exists</td><td>robotics and continuous control, cheap fast simulators, fine-tuning language models</td></tr>
+    </table>
+    <p class="note">For continuous actions the off-policy idea continues in DDPG, TD3 and SAC: a Q-network (critic) plus an actor that outputs the action, because a max over infinitely many actions is not practical. SAC is a later stage of our plan.</p>
+  </div>
+</section>
+
+<!-- ============================================================ 11 -->
+<section id="s11">
+  <div class="sh"><span class="num">11</span><h2>Our ladder on LunarLander</h2></div>
+  <p class="sub">Same method as the PPO ladder: one change per step, the same env-step budget, the same side-by-side replays.</p>
+  <div class="card">
+    <table class="t">
+      <tr><th>step</th><th>adds</th><th>what to watch</th></tr>
+      <tr><td><span class="m">q_online</span></td><td>Q-network, learn from each step as it happens (no buffer), target from the same network, ε-greedy</td><td>unstable, forgets: the problems of sections 5 and 6 together</td></tr>
+      <tr><td><span class="m">+ replay</span></td><td>replay buffer, random minibatches</td><td>more stable, more sample-efficient; Q may still drift upward</td></tr>
+      <tr><td><span class="m">+ target</span> = DQN 2015</td><td>target network θ⁻ copied every C steps</td><td>the classic DQN; compare Q's predictions with the returns that really followed</td></tr>
+      <tr><td><span class="m">rainbow_lite</span></td><td>Double DQN, dueling heads, n-step (n = 3), prioritized replay</td><td>less overestimation, faster and steadier learning; compare with PPO at equal env steps</td></tr>
+    </table>
+  </div>
+</section>
+
+</main>
+<footer><div class="wrap">
+  References: Mnih et al., <i>Human-level control through deep reinforcement learning</i> (Nature, 2015) · van Hasselt, Guez, Silver, <i>Deep RL with Double Q-learning</i> (2016) · Wang et al., <i>Dueling Network Architectures</i> (2016) · Schaul et al., <i>Prioritized Experience Replay</i> (2016) · Hessel et al., <i>Rainbow</i> (2018) · Schulman et al., <i>Proximal Policy Optimization</i> (2017). Numbers marked illustrative are made up to show the idea; the grid world, replay, overestimation and n-step panels are real computations running in your browser.
+</div></footer>
+
+<script>
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const ACOL = ["#9ca3af", "#3b82f6", "#ec4899", "#f59e0b"];
+const ANAME = ["nothing", "left engine", "main engine", "right engine"];
+const randn = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+function setup(cv) {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+// run animations only while visible
+const mods = [];
+const io = new IntersectionObserver(es => es.forEach(e => { for (const m of mods) if (m.el === e.target) m.vis = e.isIntersecting; }), { threshold: 0.02 });
+function reg(el, m) { m.el = el; m.vis = false; mods.push(m); io.observe(el); }
+let tPrev = performance.now();
+function frame(t) { const dt = Math.min(0.1, (t - tPrev) / 1000); tPrev = t; for (const m of mods) if (m.vis && m.tick) m.tick(dt); requestAnimationFrame(frame); }
+requestAnimationFrame(frame);
+window.addEventListener("resize", () => mods.forEach(m => m.draw && m.draw()));
+function seg(container, onPick) { container.querySelectorAll("button").forEach(b => b.addEventListener("click", () => { container.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); onPick(b.dataset); })); }
+
+/* ---------------------------------------------------------------- 1 · bridge bars */
+(() => {
+  const Q = [28.4, 31.0, 45.2, 33.7], P = [0.04, 0.06, 0.82, 0.08], V = Math.max(...Q);
+  const box = $("#br-bars"), txt = $("#br-text");
+  box.innerHTML = ANAME.map((n, i) => `<div class="bar"><span style="color:${ACOL[i]};font-weight:600">${n}</span><div class="track"><div class="zero" style="left:0"></div><div class="fill" style="background:${ACOL[i]}"></div></div><span class="val"></span></div>`).join("");
+  const fills = [...box.querySelectorAll(".fill")], vals = [...box.querySelectorAll(".val")], zeros = [...box.querySelectorAll(".zero")];
+  function show(v) {
+    if (v === "ppo") {
+      P.forEach((p, i) => { fills[i].style.left = "0%"; fills[i].style.width = p * 100 + "%"; vals[i].textContent = p.toFixed(2); zeros[i].style.left = "0%"; });
+      txt.innerHTML = "<b>PPO</b> outputs probabilities that sum to 1 and samples an action. They say <i>which</i> action to prefer, not how much each is worth. The critic adds one number, V(s) = 41.3.";
+    } else if (v === "q") {
+      const mx = 50;
+      Q.forEach((q, i) => { fills[i].style.left = "0%"; fills[i].style.width = q / mx * 100 + "%"; vals[i].textContent = q.toFixed(1); zeros[i].style.left = "0%"; });
+      txt.innerHTML = "<b>DQN</b> outputs an expected return for each action. The greedy action is the largest (main engine, 45.2). With the greedy policy, V(s) = max<sub>a</sub> Q(s, a) = 45.2.";
+    } else {
+      const lo = -20, hi = 5, z = (0 - lo) / (hi - lo) * 100;
+      Q.forEach((q, i) => { const a = q - V; const x = (a - lo) / (hi - lo) * 100; fills[i].style.left = Math.min(x, z) + "%"; fills[i].style.width = Math.max(Math.abs(x - z), 0.6) + "%"; vals[i].textContent = (a >= 0 ? "+" : "") + a.toFixed(1); zeros[i].style.left = z + "%"; });
+      txt.innerHTML = "Subtract V(s) = 45.2 from every Q: <b>A(s, a) = Q(s, a) − V(s)</b>. The best action has A = 0, every other action is negative by how much worse it is. This is the quantity PPO's actor needed and had to estimate from rollouts with GAE.";
+    }
+  }
+  seg($("#br-btns"), d => show(d.v)); show("ppo");
+})();
+
+/* ---------------------------------------------------------------- 2 · grid world Q-learning */
+(() => {
+  const L = ["...#..G", ".#.#.#.", ".#...P.", "...#...", "S#.P.#."];
+  const R = L.length, C = L[0].length, A = [[0, -1], [1, 0], [0, 1], [-1, 0]], AN = ["up", "right", "down", "left"];
+  const cv = $("#gw"); let S0; for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) if (L[r][c] === "S") S0 = { c, r };
+  const st = { Q: new Float64Array(R * C * 4), ag: { ...S0 }, ep: 1, t: 0, ret: 0, eps: 0.2, alpha: 0.5, gamma: 0.95, last: null, play: true, speed: 12, acc: 0, rets: [], goals: 0, pits: 0, updates: 0 };
+  const id = (c, r) => r * C + c;
+  function envStep(c, r, a) {
+    let nc = c + A[a][0], nr = r + A[a][1];
+    if (nc < 0 || nc >= C || nr < 0 || nr >= R || L[nr][nc] === "#") { nc = c; nr = r; }
+    const k = L[nr][nc];
+    if (k === "G") return { nc, nr, rew: 1, done: true, end: "goal" };
+    if (k === "P") return { nc, nr, rew: -1, done: true, end: "pit" };
+    return { nc, nr, rew: -0.04, done: false };
+  }
+  function greedy(s) { let b = -Infinity, bs = []; for (let a = 0; a < 4; a++) { const v = st.Q[s * 4 + a]; if (v > b + 1e-12) { b = v; bs = [a]; } else if (Math.abs(v - b) <= 1e-12) bs.push(a); } return bs[Math.floor(Math.random() * bs.length)]; }
+  function step(record = true) {
+    const s = id(st.ag.c, st.ag.r), explore = Math.random() < st.eps, a = explore ? Math.floor(Math.random() * 4) : greedy(s);
+    const o = envStep(st.ag.c, st.ag.r, a), s2 = id(o.nc, o.nr);
+    const nextQ = [0, 1, 2, 3].map(b => st.Q[s2 * 4 + b]), maxN = o.done ? 0 : Math.max(...nextQ);
+    const y = o.rew + st.gamma * maxN, old = st.Q[s * 4 + a];
+    st.Q[s * 4 + a] = old + st.alpha * (y - old); st.updates++;
+    if (record) st.last = { s: { ...st.ag }, a, explore, rew: o.rew, s2: { c: o.nc, r: o.nr }, done: o.done, maxN, y, old, nw: st.Q[s * 4 + a] };
+    st.ret += o.rew; st.t++;
+    if (o.done || st.t >= 100) { st.rets.push(st.ret); if (o.end === "goal") st.goals++; if (o.end === "pit") st.pits++; st.ep++; st.t = 0; st.ret = 0; st.ag = { ...S0 }; }
+    else st.ag = { c: o.nc, r: o.nr };
+  }
+  function col(v) { const t = clamp(Math.abs(v), 0, 1); const base = v >= 0 ? [21, 128, 61] : [220, 38, 38]; const mix = x => Math.round(255 + (x - 255) * (0.12 + 0.88 * t)); return t < 0.004 ? "#f8fafc" : `rgb(${mix(base[0])},${mix(base[1])},${mix(base[2])})`; }
+  function draw() {
+    const { ctx, w, h } = setup(cv); const cs = Math.min((w - 2) / C, (h - 2) / R), ox = (w - cs * C) / 2, oy = 1;
+    for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+      const x = ox + c * cs, y = oy + r * cs, k = L[r][c], s = id(c, r);
+      if (k === "#") { ctx.fillStyle = "#374151"; ctx.fillRect(x, y, cs, cs); continue; }
+      if (k === "G" || k === "P") { ctx.fillStyle = k === "G" ? "#dcfce7" : "#fee2e2"; ctx.fillRect(x, y, cs, cs); ctx.fillStyle = k === "G" ? "#15803d" : "#dc2626"; ctx.font = `600 ${cs * 0.28}px Inter, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(k === "G" ? "+1" : "−1", x + cs / 2, y + cs / 2); }
+      else {
+        const cx = x + cs / 2, cy = y + cs / 2, tri = [[[x, y], [x + cs, y]], [[x + cs, y], [x + cs, y + cs]], [[x + cs, y + cs], [x, y + cs]], [[x, y + cs], [x, y]]];
+        for (let a = 0; a < 4; a++) { ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(...tri[a][0]); ctx.lineTo(...tri[a][1]); ctx.closePath(); ctx.fillStyle = col(st.Q[s * 4 + a]); ctx.fill(); ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.lineWidth = 1; ctx.stroke(); }
+        const qs = [0, 1, 2, 3].map(a => st.Q[s * 4 + a]); const mx = Math.max(...qs);
+        if (qs.some(q => Math.abs(q) > 1e-6)) { const a = qs.indexOf(mx), dx = A[a][0], dy = A[a][1]; ctx.strokeStyle = "#111827"; ctx.fillStyle = "#111827"; ctx.lineWidth = 1.6; const l = cs * 0.2; ctx.beginPath(); ctx.moveTo(cx - dx * l, cy - dy * l); ctx.lineTo(cx + dx * l, cy + dy * l); ctx.stroke(); ctx.beginPath(); ctx.moveTo(cx + dx * l * 1.55, cy + dy * l * 1.55); ctx.lineTo(cx + dx * l - dy * l * 0.45, cy + dy * l + dx * l * 0.45); ctx.lineTo(cx + dx * l + dy * l * 0.45, cy + dy * l - dx * l * 0.45); ctx.closePath(); ctx.fill(); }
+        if (k === "S") { ctx.fillStyle = "#6b7280"; ctx.font = `600 ${cs * 0.16}px Inter, sans-serif`; ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("start", x + 4, y + 3); }
+      }
+      ctx.strokeStyle = "#e5e7eb"; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, cs - 1, cs - 1);
+    }
+    if (st.last) { const l = st.last, x = ox + l.s.c * cs + cs / 2, y = oy + l.s.r * cs + cs / 2; ctx.strokeStyle = l.explore ? "#9ca3af" : "#0d8a74"; ctx.setLineDash([4, 3]); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ox + l.s2.c * cs + cs / 2, oy + l.s2.r * cs + cs / 2); ctx.stroke(); ctx.setLineDash([]); }
+    ctx.fillStyle = "#0d8a74"; ctx.beginPath(); ctx.arc(ox + st.ag.c * cs + cs / 2, oy + st.ag.r * cs + cs / 2, cs * 0.17, 0, 7); ctx.fill(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+    panel();
+  }
+  const f = (x, d = 3) => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(d);
+  function panel() {
+    const l = st.last;
+    if (!l) { $("#gw-kv").innerHTML = "<span>—</span><span>press Step or Play</span>"; $("#gw-eq").textContent = ""; }
+    else {
+      $("#gw-kv").innerHTML = `<span>s</span><span>cell (${l.s.c}, ${l.s.r})</span><span>a</span><span>${AN[l.a]} ${l.explore ? '<span class="pill">random, ε</span>' : '<span class="pill" style="border-color:#0d8a74;color:#0d8a74">greedy</span>'}</span><span>r</span><span>${f(l.rew, 2)}</span><span>s′</span><span>cell (${l.s2.c}, ${l.s2.r})${l.done ? " · episode ends" : ""}</span><span>max Q(s′,·)</span><span>${l.done ? "0 (terminal: nothing after)" : f(l.maxN)}</span>`;
+      $("#gw-eq").innerHTML = `y = r + γ·max Q(s′,·) = ${f(l.rew, 2)} + ${st.gamma}·${f(l.maxN)} = <b>${f(l.y)}</b><br>Q(s,${AN[l.a]}) ← ${f(l.old)} + α·(y − Q) = ${f(l.old)} + ${st.alpha}·(${f(l.y - l.old)}) = <b>${f(l.nw)}</b>`;
+    }
+    const last = st.rets.slice(-20), avg = last.length ? last.reduce((a, b) => a + b, 0) / last.length : 0;
+    $("#gw-ep").innerHTML = `episode ${st.ep} · ${st.updates.toLocaleString()} updates · reached +1: ${st.goals}, fell in −1: ${st.pits} · mean return of the last 20 episodes: ${last.length ? avg.toFixed(2) : "—"} (best possible ≈ +0.64)`;
+  }
+  $("#gw-play").onclick = () => { st.play = !st.play; $("#gw-play").textContent = st.play ? "Pause" : "Play"; $("#gw-play").classList.toggle("on", st.play); };
+  $("#gw-step").onclick = () => { step(); draw(); };
+  $("#gw-fast").onclick = () => { const target = st.ep + 300; let guard = 0; while (st.ep < target && guard++ < 60000) step(false); st.last = null; draw(); };
+  $("#gw-reset").onclick = () => { st.Q.fill(0); st.ag = { ...S0 }; st.ep = 1; st.t = 0; st.ret = 0; st.last = null; st.rets = []; st.goals = 0; st.pits = 0; st.updates = 0; draw(); };
+  $("#gw-eps").oninput = e => { st.eps = +e.target.value; $("#gw-eps-v").textContent = st.eps.toFixed(2); };
+  $("#gw-speed").oninput = e => { st.speed = +e.target.value; $("#gw-speed-v").textContent = st.speed + "/s"; };
+  reg(cv, { draw, tick(dt) { if (!st.play) return; st.acc += dt * st.speed; let n = 0; while (st.acc >= 1 && n++ < 60) { st.acc -= 1; step(); } if (n) draw(); } });
+  draw();
+})();
+
+/* ---------------------------------------------------------------- 3 · TD target calculator */
+(() => {
+  const Qs = [28.4, 31.0, 45.2, 33.7], Qn = [30.1, 33.0, 44.0, 35.2];
+  let act = 2;
+  const box = $("#td-act");
+  box.innerHTML = ANAME.map((n, i) => `<button class="btn ${i === act ? "on" : ""}" data-a="${i}" style="${i === act ? "" : `color:${ACOL[i]}`}">${n}</button>`).join("");
+  seg(box, d => { act = +d.a; box.querySelectorAll("button").forEach((b, i) => b.style.color = b.classList.contains("on") ? "" : ACOL[i]); draw(); });
+  $("#td-next").innerHTML = ANAME.map((n, i) => `<div class="bar"><span>${n}</span><div class="track"><div class="fill" style="width:${Qn[i] / 50 * 100}%;background:${ACOL[i]};opacity:.55"></div></div><span class="val">${Qn[i].toFixed(1)}</span></div>`).join("");
+  const cv = $("#td-cv");
+  function draw() {
+    const r = +$("#td-r").value, g = +$("#td-g").value, done = $("#td-done").checked;
+    $("#td-r-v").textContent = r.toFixed(1); $("#td-g-v").textContent = g.toFixed(3);
+    const mx = Math.max(...Qn), y = r + (done ? 0 : g * mx), q = Qs[act], d = y - q, hub = Math.abs(d) <= 1 ? 0.5 * d * d : Math.abs(d) - 0.5;
+    const { ctx, w, h } = setup(cv); const top = 10, bot = h - 28, sc = v => bot - (v / 60) * (bot - top);
+    const bw = Math.min(70, w / 7), gap = (w - bw * 4) / 5;
+    ctx.strokeStyle = "#e5e7eb"; ctx.lineWidth = 1; for (let v = 0; v <= 60; v += 20) { ctx.beginPath(); ctx.moveTo(0, sc(v)); ctx.lineTo(w, sc(v)); ctx.stroke(); ctx.fillStyle = "#9ca3af"; ctx.font = "10px JetBrains Mono, monospace"; ctx.textAlign = "left"; ctx.fillText(v, 2, sc(v) - 2); }
+    Qs.forEach((v, i) => {
+      const x = gap + i * (bw + gap); ctx.globalAlpha = i === act ? 1 : 0.28; ctx.fillStyle = ACOL[i]; ctx.fillRect(x, sc(v), bw, bot - sc(v)); ctx.globalAlpha = 1;
+      ctx.fillStyle = "#374151"; ctx.font = "11px Inter, sans-serif"; ctx.textAlign = "center"; ctx.fillText(ANAME[i].replace(" engine", ""), x + bw / 2, h - 12);
+      ctx.fillStyle = i === act ? "#fff" : "#6b7280"; ctx.font = "600 11px JetBrains Mono, monospace"; ctx.fillText(v.toFixed(1), x + bw / 2, sc(v) + 15);
+      if (i === act) {
+        const yy = sc(clamp(y, -5, 65)); ctx.strokeStyle = "#c2410c"; ctx.lineWidth = 2; ctx.setLineDash([5, 3]); ctx.beginPath(); ctx.moveTo(x - 8, yy); ctx.lineTo(x + bw + 8, yy); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = "#c2410c"; ctx.textAlign = "left"; ctx.fillText("y = " + y.toFixed(2), x + bw + 10, yy + 4);
+        ctx.strokeStyle = "#111827"; ctx.lineWidth = 1.5; const x0 = x + bw / 2; ctx.beginPath(); ctx.moveTo(x0, sc(v)); ctx.lineTo(x0, yy); ctx.stroke();
+      } else { ctx.fillStyle = "#9ca3af"; ctx.font = "10px Inter, sans-serif"; ctx.fillText("no gradient", x + bw / 2, sc(v) - 16); }
+    });
+    $("#td-eq").innerHTML = `y = r + γ·${done ? "0 <span class='muted'>(episode ended)</span>" : "max Q<sub>θ⁻</sub>(s′,·)"} = ${r.toFixed(2)} + ${done ? "0" : g.toFixed(3) + " · " + mx.toFixed(1)} = <b style="color:#c2410c">${y.toFixed(2)}</b><br>error δ = y − Q<sub>θ</sub>(s, ${ANAME[act]}) = ${y.toFixed(2)} − ${q.toFixed(1)} = <b>${d >= 0 ? "+" : ""}${d.toFixed(2)}</b><br>loss ½δ² = ${(0.5 * d * d).toFixed(2)} · Huber = ${hub.toFixed(2)} <span class="muted">(Huber grows linearly past |δ| = 1, so one huge error cannot dominate a minibatch)</span><br>gradient step: Q<sub>θ</sub>(s, ${ANAME[act]}) moves ${d >= 0 ? "up" : "down"} toward y; the other three outputs are not in this loss`;
+  }
+  ["#td-r", "#td-g", "#td-done"].forEach(s => $(s).addEventListener("input", draw));
+  reg(cv, { draw }); draw();
+})();
+
+/* ---------------------------------------------------------------- 4 · ε-greedy vs sampling */
+(() => {
+  const Q = [28.4, 31.0, 45.2, 33.7], P = [0.04, 0.06, 0.82, 0.08];
+  const epsAt = p => p < 0.1 ? 1 - (1 - 0.05) * p / 0.1 : 0.05;
+  const cv = $("#eps-cv"), cd = $("#eps-dqn"), cp = $("#eps-ppo");
+  const hist = { d: [], p: [] }; let acc = 0;
+  function drawSched() {
+    const prog = +$("#eps-prog").value, e = epsAt(prog);
+    $("#eps-prog-v").textContent = Math.round(prog * 100) + "%"; $("#eps-val").innerHTML = `ε = <b>${e.toFixed(2)}</b>`;
+    const { ctx, w, h } = setup(cv), L = 34, B = h - 24, T = 10, sx = p => L + p * (w - L - 8), sy = v => B - v * (B - T);
+    ctx.strokeStyle = "#e5e7eb"; ctx.fillStyle = "#9ca3af"; ctx.font = "10px JetBrains Mono, monospace";
+    [0, 0.5, 1].forEach(v => { ctx.beginPath(); ctx.moveTo(L, sy(v)); ctx.lineTo(w, sy(v)); ctx.stroke(); ctx.fillText(v.toFixed(1), 4, sy(v) + 3); });
+    ctx.fillText("0%", L, h - 8); ctx.fillText("training →", w / 2 - 30, h - 8); ctx.fillText("100%", w - 34, h - 8);
+    ctx.strokeStyle = "#0d8a74"; ctx.lineWidth = 2; ctx.beginPath(); for (let i = 0; i <= 200; i++) { const p = i / 200; i ? ctx.lineTo(sx(p), sy(epsAt(p))) : ctx.moveTo(sx(p), sy(epsAt(p))); } ctx.stroke();
+    ctx.fillStyle = "#0d8a74"; ctx.beginPath(); ctx.arc(sx(prog), sy(e), 5, 0, 7); ctx.fill();
+    ctx.fillStyle = "#374151"; ctx.font = "11px Inter, sans-serif"; ctx.fillText("ε (probability of a random action)", L + 6, T + 10);
+  }
+  function drawStrip(c, arr) { const { ctx, w, h } = setup(c), n = 60, s = w / n; arr.forEach((d, i) => { const x = i * s + 1; ctx.fillStyle = ACOL[d.a]; ctx.fillRect(x, 6, s - 2, h - 12); if (d.rand) { ctx.strokeStyle = "#111827"; ctx.lineWidth = 1.5; ctx.strokeRect(x + 0.75, 6.75, s - 3.5, h - 13.5); } }); }
+  function decide() {
+    const e = epsAt(+$("#eps-prog").value), r = Math.random() < e;
+    hist.d.push({ a: r ? Math.floor(Math.random() * 4) : 2, rand: r });
+    let u = Math.random(), a = 0; while (a < 3 && u > P[a]) { u -= P[a]; a++; } hist.p.push({ a, rand: false });
+    if (hist.d.length > 60) hist.d.shift(); if (hist.p.length > 60) hist.p.shift();
+  }
+  $("#eps-prog").addEventListener("input", drawSched);
+  reg(cv, { draw: drawSched, tick(dt) { acc += dt * 8; let k = 0; while (acc >= 1) { acc--; decide(); k++; } if (k) { drawStrip(cd, hist.d); drawStrip(cp, hist.p); } } });
+  drawSched();
+})();
+
+/* ---------------------------------------------------------------- 5 · replay buffer */
+(() => {
+  const cvS = $("#rb-state"), cvR = $("#rb-ring"), cvSp = $("#rb-spread");
+  const car = { x: -0.5, v: 0, t: 0, ep: 0 };
+  function resetCar() { car.x = -0.6 + Math.random() * 0.2; car.v = 0; car.t = 0; car.ep++; }
+  resetCar();
+  const hue = ep => (ep * 67) % 360;
+  let mode = "dqn", play = true, acc = 0, rate = 16;
+  let st;
+  function fresh() { st = { buf: [], ptr: 0, batch: [], phase: "collect", queue: [], epoch: 0, mb: [], env: 0, grad: 0, recent: [], spread: 0, age: 0, flash: 0, discarded: 0, ghost: 0 }; }
+  fresh();
+  const CAP = { consec: 8, ppo: 48, dqn: 120 };
+  function envStep() {
+    const a = Math.random() < 0.25 ? Math.floor(Math.random() * 3) : (car.v >= 0 ? 2 : 0);
+    const tr = { x: car.x, v: car.v, ep: car.ep, born: st.env };
+    car.v = clamp(car.v + (a - 1) * 0.001 - 0.0025 * Math.cos(3 * car.x), -0.07, 0.07); car.x += car.v; if (car.x < -1.2) { car.x = -1.2; car.v = 0; }
+    car.t++; st.env++;
+    st.recent.push([tr.x, tr.v]); if (st.recent.length > 400) st.recent.shift();
+    if (car.x >= 0.5 || car.t >= 200) resetCar();
+    return tr;
+  }
+  function measure(items) {
+    if (items.length < 2 || st.recent.length < 20) return;
+    const sd = (arr, k) => { const m = arr.reduce((s, a) => s + a[k], 0) / arr.length; return Math.sqrt(arr.reduce((s, a) => s + (a[k] - m) ** 2, 0) / arr.length); };
+    const pts = items.map(t => [t.x, t.v]);
+    const ratio = 0.5 * (sd(pts, 0) / (sd(st.recent, 0) + 1e-9) + sd(pts, 1) / (sd(st.recent, 1) + 1e-9));
+    st.spread = st.spread ? 0.9 * st.spread + 0.1 * Math.min(ratio, 1.5) : Math.min(ratio, 1.5);
+    const age = items.reduce((s, t) => s + (st.env - t.born), 0) / items.length; st.age = st.age ? 0.9 * st.age + 0.1 * age : age;
+  }
+  function tickOnce() {
+    if (mode === "consec") {
+      st.buf.push(envStep()); if (st.buf.length > 8) st.buf.shift();
+      st.mb = st.buf.map((_, i) => i); st.grad++; measure(st.buf);
+    } else if (mode === "dqn") {
+      const tr = envStep();
+      if (st.buf.length < CAP.dqn) st.buf.push(tr); else { st.buf[st.ptr] = tr; } st.ptr = (st.ptr + 1) % CAP.dqn;
+      if (st.buf.length >= 16) { const idx = new Set(); while (idx.size < 8) idx.add(Math.floor(Math.random() * st.buf.length)); st.mb = [...idx]; st.grad++; measure(st.mb.map(i => st.buf[i])); }
+    } else {
+      if (st.phase === "collect") {
+        st.buf.push(envStep()); st.mb = [];
+        if (st.buf.length >= CAP.ppo) { st.queue = []; for (let e = 0; e < 4; e++) { const o = [...Array(CAP.ppo).keys()].sort(() => Math.random() - 0.5); for (let k = 0; k < 6; k++) st.queue.push({ e, idx: o.slice(k * 8, k * 8 + 8) }); } st.phase = "update"; }
+      } else {
+        const q = st.queue.shift(); st.mb = q.idx; st.epoch = q.e + 1; st.grad++; measure(st.mb.map(i => st.buf[i]));
+        if (!st.queue.length) { st.phase = "collect"; st.discarded += st.buf.length; st.buf = []; st.ghost = 1; }
+      }
+    }
+  }
+  function drawState() {
+    const { ctx, w, h } = setup(cvS), L = 40, B = h - 26, T = 8, sx = x => L + (x + 1.2) / 1.8 * (w - L - 10), sy = v => B - (v + 0.07) / 0.14 * (B - T);
+    ctx.strokeStyle = "#e5e7eb"; ctx.lineWidth = 1; ctx.strokeRect(L, T, w - L - 10, B - T);
+    ctx.beginPath(); ctx.moveTo(L, sy(0)); ctx.lineTo(w - 10, sy(0)); ctx.stroke();
+    ctx.strokeStyle = "#15803d"; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(sx(0.5), T); ctx.lineTo(sx(0.5), B); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "#9ca3af"; ctx.font = "10px JetBrains Mono, monospace"; ctx.fillText("−1.2", L, h - 10); ctx.fillText("position", (w + L) / 2 - 24, h - 10); ctx.fillText("0.6", w - 30, h - 10); ctx.fillText("flag", sx(0.5) - 30, T + 10);
+    ctx.save(); ctx.translate(12, (B + T) / 2 + 22); ctx.rotate(-Math.PI / 2); ctx.fillText("velocity", 0, 0); ctx.restore();
+    for (const t of st.buf) { ctx.fillStyle = `hsla(${hue(t.ep)},55%,62%,.75)`; ctx.beginPath(); ctx.arc(sx(t.x), sy(t.v), 3, 0, 7); ctx.fill(); }
+    const color = mode === "ppo" ? "#6250d6" : mode === "dqn" ? "#0d8a74" : "#111827";
+    for (const i of st.mb) { const t = st.buf[i]; if (!t) continue; ctx.fillStyle = "#fff"; ctx.strokeStyle = color; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.arc(sx(t.x), sy(t.v), 6, 0, 7); ctx.fill(); ctx.stroke(); }
+    ctx.fillStyle = "#0d8a74"; ctx.beginPath(); ctx.arc(sx(car.x), sy(car.v), 5, 0, 7); ctx.fill();
+  }
+  function drawRing() {
+    const { ctx, w, h } = setup(cvR), n = CAP[mode], cx = w / 2, cy = h / 2 - 6, R = Math.min(w, h) / 2 - 34, sel = new Set(st.mb);
+    const r0 = Math.max(3.2, Math.min(10, Math.PI * R / n * 0.8));
+    for (let i = 0; i < n; i++) {
+      const ang = -Math.PI / 2 + i / n * Math.PI * 2, x = cx + R * Math.cos(ang), y = cy + R * Math.sin(ang), t = st.buf[i];
+      ctx.beginPath(); ctx.arc(x, y, r0, 0, 7);
+      if (t) { ctx.fillStyle = `hsl(${hue(t.ep)},55%,${sel.has(i) ? 45 : 70}%)`; ctx.fill(); } else { ctx.fillStyle = st.ghost > 0 && mode === "ppo" ? `rgba(220,38,38,${0.35 * st.ghost})` : "#f1f3f6"; ctx.fill(); }
+      if (sel.has(i)) { ctx.strokeStyle = "#111827"; ctx.lineWidth = 2; ctx.stroke(); }
+    }
+    if (mode === "dqn" && st.buf.length) { const ang = -Math.PI / 2 + st.ptr / n * Math.PI * 2; ctx.strokeStyle = "#c2410c"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx + (R - 22) * Math.cos(ang), cy + (R - 22) * Math.sin(ang)); ctx.lineTo(cx + (R - 10) * Math.cos(ang), cy + (R - 10) * Math.sin(ang)); ctx.stroke(); }
+    ctx.textAlign = "center"; ctx.fillStyle = "#111827"; ctx.font = "600 13px Inter, sans-serif";
+    const title = mode === "dqn" ? "replay buffer (120)" : mode === "ppo" ? (st.phase === "collect" ? "collecting the batch" : `epoch ${st.epoch} of 4`) : "the last 8 steps";
+    ctx.fillText(title, cx, cy - 4); ctx.font = "11.5px Inter, sans-serif"; ctx.fillStyle = "#6b7280";
+    const sub = mode === "dqn" ? (st.buf.length < CAP.dqn ? `filling: ${st.buf.length}/120` : "full: the oldest is overwritten") : mode === "ppo" ? (st.phase === "collect" ? `${st.buf.length}/48 steps, π_old frozen` : "no new env steps while updating") : "slides forward every step";
+    ctx.fillText(sub, cx, cy + 14);
+    ctx.fillText(mode === "dqn" ? "orange tick = where the next step is written" : mode === "ppo" ? "after 4 epochs the batch is thrown away (red)" : "every update sees 8 consecutive states", cx, h - 8);
+  }
+  function drawStats() {
+    const { ctx, w, h } = setup(cvSp), v = clamp(st.spread / 1.2, 0, 1);
+    ctx.fillStyle = "#f1f3f6"; ctx.fillRect(0, 4, w, h - 8); ctx.fillStyle = mode === "ppo" ? "#6250d6" : mode === "dqn" ? "#0d8a74" : "#111827"; ctx.fillRect(0, 4, w * v, h - 8);
+    $("#rb-spread-v").textContent = st.spread ? st.spread.toFixed(2) + (st.spread < 0.35 ? "  narrow: one corner of the state space" : st.spread > 0.75 ? "  wide: looks like all recent states" : "") : "—";
+    $("#rb-age").textContent = st.age ? Math.round(st.age) + " env steps old" : "—";
+    const uses = st.env ? (st.grad * 8 / st.env) : 0;
+    $("#rb-kv").innerHTML = `<span>env steps</span><span>${st.env}</span><span>gradient steps</span><span>${st.grad}</span><span>uses per experience</span><span>${uses.toFixed(1)}</span>` + (mode === "ppo" ? `<span>thrown away</span><span>${st.discarded}</span>` : "");
+  }
+  const draw = () => { drawState(); drawRing(); drawStats(); };
+  seg($("#rb-mode"), d => { mode = d.m; fresh(); draw(); });
+  $("#rb-play").onclick = () => { play = !play; $("#rb-play").textContent = play ? "Pause" : "Play"; };
+  $("#rb-speed").oninput = e => { rate = +e.target.value; $("#rb-speed-v").textContent = rate; }; $("#rb-speed-v").textContent = rate;
+  reg(cvS, { draw, tick(dt) { if (!play) return; st.ghost = Math.max(0, st.ghost - dt * 1.5); acc += dt * rate; let k = 0; while (acc >= 1 && k++ < 50) { acc--; tickOnce(); } draw(); } });
+  draw();
+})();
+
+/* ---------------------------------------------------------------- 6 · target network */
+(() => {
+  const N = 50, on = $("#tn-online"), tg = $("#tn-target");
+  on.innerHTML = tg.innerHTML = Array(N).fill("<i></i>").join("");
+  const wOn = Array.from({ length: N }, () => randn() * 0.6), wT = [...wOn];
+  const cell = v => { const t = clamp(Math.abs(v) / 1.6, 0, 1), c = v >= 0 ? [13, 138, 116] : [194, 65, 12]; return `rgba(${c[0]},${c[1]},${c[2]},${0.12 + 0.75 * t})`; };
+  const paint = () => { [...on.children].forEach((e, i) => e.style.background = cell(wOn[i])); [...tg.children].forEach((e, i) => e.style.background = cell(wT[i])); };
+  const C = 100, cv = $("#tn-cv");
+  const sim = { n: 0, pA: 10, pB: 10, copy: 10, k: 0, yA: [], yB: [], pAh: [], pBh: [], acc: 0 };  // both start at the true value
+  function update() {
+    sim.n = 0.9 * sim.n + randn() * 0.3;
+    const qA = sim.pA + sim.n, yA = 1 + 0.9 * qA; sim.pA += 0.15 * (yA - sim.pA);
+    if (sim.k % C === 0) { sim.copy = sim.pB + sim.n; for (let i = 0; i < N; i++) wT[i] = wOn[i]; const b = $("#tn-tbox"); b.classList.add("flash"); setTimeout(() => b.classList.remove("flash"), 450); }
+    const yB = 1 + 0.9 * sim.copy; sim.pB += 0.15 * (yB - sim.pB);
+    for (let i = 0; i < N; i++) wOn[i] += randn() * 0.06;
+    sim.k++; for (const [a, v] of [[sim.yA, yA], [sim.yB, yB], [sim.pAh, sim.pA], [sim.pBh, sim.pB]]) { a.push(v); if (a.length > 400) a.shift(); }
+    $("#tn-prog").style.width = (sim.k % C) / C * 100 + "%";
+  }
+  function draw() {
+    const { ctx, w, h } = setup(cv), half = h / 2, rows = [["target uses the live network (no target network)", sim.yA, sim.pAh, 0], ["target uses the frozen copy θ⁻ (copied every 100 steps)", sim.yB, sim.pBh, half]];
+    for (const [title, ys, ps, oy] of rows) {
+      const T = oy + 20, B = oy + half - 10, sx = i => 6 + i / 400 * (w - 12), sy = v => B - clamp((v - 2) / 16, 0, 1) * (B - T);
+      ctx.fillStyle = "#374151"; ctx.font = "600 11.5px Inter, sans-serif"; ctx.textAlign = "left"; ctx.fillText(title, 6, oy + 13);
+      ctx.strokeStyle = "#e5e7eb"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(6, sy(10)); ctx.lineTo(w - 6, sy(10)); ctx.stroke(); ctx.fillStyle = "#9ca3af"; ctx.font = "10px JetBrains Mono, monospace"; ctx.textAlign = "right"; ctx.fillText("10 = true value", w - 8, sy(10) - 3);
+      const line = (arr, col, wd) => { ctx.strokeStyle = col; ctx.lineWidth = wd; ctx.beginPath(); arr.forEach((v, i) => i ? ctx.lineTo(sx(i), sy(v)) : ctx.moveTo(sx(i), sy(v))); ctx.stroke(); };
+      line(ys, "#c2410c", 1.3); line(ps, "#0d8a74", 2.2);
+    }
+    ctx.textAlign = "left";
+  }
+  reg(cv, { draw, tick(dt) { sim.acc += dt * 45; let k = 0; while (sim.acc >= 1 && k++ < 20) { sim.acc--; update(); } paint(); draw(); } });
+  for (let i = 0; i < 400; i++) update(); paint(); draw();
+  const lg = document.createElement("div"); lg.className = "legend"; lg.innerHTML = '<span><i style="background:#c2410c"></i>target y</span><span><i style="background:#0d8a74"></i>prediction Q(s, a)</span>'; cv.after(lg);
+})();
+
+/* ---------------------------------------------------------------- 7 · loops + timeline */
+(() => {
+  const D = ["for each env step t:", "  a = ε-greedy(Q_θ(s))              <c># act</c>", "  s′, r, done = env.step(a)", "  buffer.add(s, a, r, s′, done)      <c># keep it</c>", "  if t % 4 == 0 and buffer ≥ 1,000:", "    B = buffer.sample(64)            <c># old + new, random</c>", "    y = r + γ(1−done)·max Q_θ⁻(s′,·)", "    θ ← θ − lr·∇ ½(Q_θ(s,a) − y)²     <c># 1 gradient step</c>", "  every 1,000 steps: θ⁻ ← θ          <c># refresh target</c>"];
+  const P = ["repeat:", "  play 2,048 steps with π_old        <c># act (sample π)</c>", "  A, target = GAE(r, V_old)          <c># once per batch</c>", "  for epoch in 1..10:", "    for each minibatch of 64:", "      r = π/π_old; L_π = −min(rA, clip(r)A)", "      L_V = ½(target − V)²", "      gradient step on actor and critic", "  throw the batch away               <c># on-policy</c>"];
+  const render = (el, lines) => el.innerHTML = lines.map(l => `<div>${l.replace(/<c>/g, '<span class="c">').replace(/<\/c>/g, "</span>")}</div>`).join("");
+  render($("#lp-dqn"), D); render($("#lp-ppo"), P);
+  const dl = [...$("#lp-dqn").children], pl = [...$("#lp-ppo").children];
+  const hl = (ls, ks, cls) => ls.forEach((e, i) => e.classList.toggle(cls, ks.includes(i)));
+  const cv = $("#lp-cv"), W = 160;
+  const ev = { d: [], p: [] }; let t = 0, acc = 0, dq = { t: 0, g: 0 }, pp = { phase: "collect", n: 0, u: 0 };
+  function tick1() {
+    t++;
+    // DQN: one env step per tick, gradient every 4 after 12 steps, copy every 10 gradient steps
+    dq.t++; const de = { env: true }; let dk = [1, 2, 3];
+    if (dq.t % 4 === 0 && dq.t > 12) { de.grad = true; dq.g++; dk = [1, 2, 3, 4, 5, 6, 7]; if (dq.g % 10 === 0) { de.copy = true; dk.push(8); } }
+    ev.d.push(de); hl(dl, dk, "hl-d");
+    // PPO: 32 env steps, then 20 gradient steps, then discard
+    const pe = {};
+    if (pp.phase === "collect") { pe.env = true; pp.n++; hl(pl, [1], "hl-p"); if (pp.n >= 32) { pp.phase = "update"; pp.u = 0; } }
+    else { pe.grad = true; pp.u++; hl(pl, [3, 4, 5, 6, 7], "hl-p"); if (pp.u >= 20) { pe.discard = true; pp.phase = "collect"; pp.n = 0; hl(pl, [8], "hl-p"); } }
+    if (pp.phase === "collect" && pp.n === 1) hl(pl, [1, 2], "hl-p");
+    ev.p.push(pe); if (ev.d.length > W) ev.d.shift(); if (ev.p.length > W) ev.p.shift();
+  }
+  function draw() {
+    const { ctx, w, h } = setup(cv), s = (w - 70) / W, rows = [["DQN", ev.d, "#0d8a74", 10], ["PPO", ev.p, "#6250d6", h / 2 + 4]];
+    for (const [name, arr, col, oy] of rows) {
+      ctx.fillStyle = col; ctx.font = "600 12px Inter, sans-serif"; ctx.textAlign = "left"; ctx.fillText(name, 0, oy + 30);
+      ctx.fillStyle = "#9ca3af"; ctx.font = "10px Inter, sans-serif"; ctx.fillText("env", 36, oy + 14); ctx.fillText("grad", 36, oy + 42);
+      arr.forEach((e, i) => { const x = 66 + i * s;
+        if (e.env) { ctx.fillStyle = "#94a3b8"; ctx.fillRect(x, oy + 5, Math.max(1, s - 1), 12); }
+        if (e.grad) { ctx.fillStyle = col; ctx.fillRect(x, oy + 32, Math.max(1, s - 1), 14); }
+        if (e.copy) { ctx.fillStyle = "#c2410c"; ctx.beginPath(); ctx.moveTo(x, oy + 22); ctx.lineTo(x + 4, oy + 26); ctx.lineTo(x, oy + 30); ctx.lineTo(x - 4, oy + 26); ctx.fill(); }
+        if (e.discard) { ctx.fillStyle = "#dc2626"; ctx.fillRect(x, oy + 2, 2, 46); }
+      });
+    }
+  }
+  reg(cv, { draw, tick(dt) { acc += dt * 6; let k = 0; while (acc >= 1 && k++ < 10) { acc--; tick1(); } draw(); } });
+  for (let i = 0; i < 60; i++) tick1(); draw();
+})();
+
+/* ---------------------------------------------------------------- 8a · overestimation */
+(() => {
+  const cv = $("#ov-cv"); let k = 4, s = 1, lastA = null, lastB = null, n = 0, sumMax = 0, sumDbl = 0;
+  function draw1() { lastA = Array.from({ length: k }, () => randn() * s); lastB = Array.from({ length: k }, () => randn() * s); const a = lastA.indexOf(Math.max(...lastA)); n++; sumMax += lastA[a]; sumDbl += lastB[a]; }
+  function draw() {
+    $("#ov-k-v").textContent = k; $("#ov-s-v").textContent = s.toFixed(1);
+    const { ctx, w, h } = setup(cv), mid = h * 0.55, sc = (h * 0.4) / (3 * s);
+    ctx.strokeStyle = "#111827"; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "#6b7280"; ctx.font = "10.5px Inter, sans-serif"; ctx.textAlign = "right"; ctx.fillText("true value of every action = 0", w - 4, mid + 14);
+    if (lastA) {
+      const bw = (w - 20) / (k * 2.2), a = lastA.indexOf(Math.max(...lastA));
+      lastA.forEach((v, i) => { const x = 10 + i * bw * 2.2; ctx.fillStyle = i === a ? "#0d8a74" : "#99d5c9"; ctx.fillRect(x, Math.min(mid, mid - v * sc), bw, Math.abs(v * sc));
+        ctx.fillStyle = i === a ? "#6250d6" : "#d6d1f6"; ctx.fillRect(x + bw, Math.min(mid, mid - lastB[i] * sc), bw * 0.8, Math.abs(lastB[i] * sc)); });
+      ctx.fillStyle = "#374151"; ctx.textAlign = "center"; ctx.font = "10.5px Inter, sans-serif"; const x = 10 + a * bw * 2.2 + bw / 2; ctx.fillText("max", x, mid - lastA[a] * sc - 6);
+    }
+    const mb = n ? sumMax / n : 0, db = n ? sumDbl / n : 0;
+    $("#ov-kv").innerHTML = `<span>draws</span><span>${n.toLocaleString()}</span><span style="color:#0d8a74">DQN target, mean of max</span><span><b>${n ? (mb >= 0 ? "+" : "") + mb.toFixed(3) : "—"}</b> (biased up)</span><span style="color:#6250d6">Double DQN, mean</span><span><b>${n ? (db >= 0 ? "+" : "") + db.toFixed(3) : "—"}</b> (≈ 0, unbiased)</span><span>true max</span><span>0</span>`;
+  }
+  $("#ov-one").onclick = () => { draw1(); draw(); };
+  $("#ov-many").onclick = () => { for (let i = 0; i < 2000; i++) draw1(); draw(); };
+  $("#ov-reset").onclick = () => { n = 0; sumMax = 0; sumDbl = 0; lastA = null; draw(); };
+  $("#ov-k").oninput = e => { k = +e.target.value; n = 0; sumMax = 0; sumDbl = 0; lastA = null; draw(); };
+  $("#ov-s").oninput = e => { s = +e.target.value; n = 0; sumMax = 0; sumDbl = 0; lastA = null; draw(); };
+  const lg = document.createElement("div"); lg.className = "legend"; lg.innerHTML = '<span><i style="background:#0d8a74"></i>estimates set A (choose + score: DQN)</span><span><i style="background:#6250d6"></i>independent set B (scores A\'s choice: Double)</span>'; cv.after(lg);
+  reg(cv, { draw }); draw1(); draw();
+})();
+
+/* ---------------------------------------------------------------- 8c · n-step vs GAE */
+(() => {
+  const cv = $("#ns-cv");
+  function draw() {
+    const n = +$("#ns-n").value, l = +$("#ns-l").value, K = 30;
+    $("#ns-n-v").textContent = n; $("#ns-l-v").textContent = l.toFixed(2) + `  (mean lookahead ${(1 / (1 - l)).toFixed(1)} steps)`;
+    const { ctx, w, h } = setup(cv), L = 30, B = h - 24, T = 14, bw = (w - L - 10) / K, sy = v => B - v * (B - T);
+    ctx.strokeStyle = "#e5e7eb"; ctx.fillStyle = "#9ca3af"; ctx.font = "10px JetBrains Mono, monospace";
+    [0, 0.5, 1].forEach(v => { ctx.beginPath(); ctx.moveTo(L, sy(v)); ctx.lineTo(w, sy(v)); ctx.stroke(); ctx.fillText(v.toFixed(1), 2, sy(v) + 3); });
+    for (let k = 1; k <= K; k++) {
+      const x = L + (k - 1) * bw, g = (1 - l) * Math.pow(l, k - 1) + (k === K ? Math.pow(l, K) : 0);
+      ctx.fillStyle = "#6250d6"; ctx.globalAlpha = 0.75; ctx.fillRect(x + bw * 0.5, sy(g), bw * 0.42, B - sy(g)); ctx.globalAlpha = 1;
+      if (k === n) { ctx.fillStyle = "#0d8a74"; ctx.fillRect(x + bw * 0.06, sy(1), bw * 0.42, B - sy(1)); }
+      if (k % 5 === 0 || k === 1) { ctx.fillStyle = "#6b7280"; ctx.textAlign = "center"; ctx.fillText(k, x + bw / 2, h - 8); }
+    }
+    ctx.textAlign = "left"; ctx.fillStyle = "#374151"; ctx.font = "11px Inter, sans-serif"; ctx.fillText("weight on the k-step lookahead  (k →)", L + 6, T - 2);
+  }
+  ["#ns-n", "#ns-l"].forEach(s => $(s).addEventListener("input", draw));
+  const lg = document.createElement("div"); lg.className = "legend"; lg.innerHTML = '<span><i style="background:#0d8a74"></i>DQN n-step: all weight on k = n</span><span><i style="background:#6250d6"></i>PPO GAE: (1 − λ)λ<sup>k−1</sup> (the last bar also holds the tail)</span>'; cv.after(lg);
+  reg(cv, { draw }); draw();
+})();
+</script>
+</body>
+</html>
