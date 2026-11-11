@@ -7,7 +7,7 @@ import { firstCrossing, fmt, movingAverage } from "@/lib/math";
 import type { EpisodeRec, RunConfig, RunDetail, RunMeta } from "@/lib/types";
 import NavBar from "./NavBar";
 import Panel, { ChartTitle } from "./Panel";
-import UChart, { Marker, SeriesSpec } from "./UChart";
+import UChart, { LegendToggles, Marker, SeriesSpec } from "./UChart";
 
 type LiteEpisode = EpisodeRec & { critic_sat?: number; actor_sat?: number };
 
@@ -109,7 +109,16 @@ function switches(cfg: RunConfig | undefined) {
   return `actor ${cfg.actor_lr} · critic ${cfg.critic_lr} · γ ${cfg.gamma} · ${cfg.num_episodes} ep`;
 }
 
+/** Legend clicks hide or show a setup on every chart of the page. */
 export default function Compare() {
+  return (
+    <LegendToggles>
+      <CompareCharts />
+    </LegendToggles>
+  );
+}
+
+function CompareCharts() {
   const [runs, setRuns] = useState<RunMeta[]>([]);
   const [env, setEnv] = useState<string>("all");
   const [selected, setSelected] = useState<string[]>([]);

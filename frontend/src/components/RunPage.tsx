@@ -9,7 +9,7 @@ import type { EnvId, StepRec } from "@/lib/types";
 import EnvView from "./EnvView";
 import NavBar from "./NavBar";
 import Panel from "./Panel";
-import UChart, { Marker, SeriesSpec } from "./UChart";
+import UChart, { LegendToggles, Marker, SeriesSpec } from "./UChart";
 
 // ------------------------------------------------------------------ data
 type Row = Record<string, number | null>;
@@ -634,8 +634,8 @@ function Compare({ algos, selected, onSelect }: { algos: AlgoSummary[]; selected
         x: r.x,
         ys: [...r.ys, band, bandLo],
         series: [
-          ...spec().map((sp) => ({ ...sp, label: `${sp.label} A>0` })),
-          ...spec([4, 3]).map((sp) => ({ ...sp, label: `${sp.label} A<0`, noLegend: true })),
+          ...spec().map((sp) => ({ ...sp, label: `${sp.label} A>0`, group: sp.label })),
+          ...spec([4, 3]).map((sp) => ({ ...sp, label: `${sp.label} A<0`, noLegend: true, group: sp.label })),
           { label: "clip 1.2", color: GOOD_COLOR, hidden: true },
           { label: "clip 0.8", color: GOOD_COLOR, hidden: true },
         ],
@@ -1819,6 +1819,7 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
 
   return (
     <EnvCtx.Provider value={env}>
+    <LegendToggles>
     <div className="min-h-screen bg-[#fafaf9]">
       <NavBar
         active="run"
@@ -1947,6 +1948,7 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
         )}
       </main>
     </div>
+    </LegendToggles>
     </EnvCtx.Provider>
   );
 }
