@@ -99,6 +99,13 @@ One more variant sits beside the ladder, not on it:
 
 With whole episodes (200k steps): CartPole 5 episodes per batch → 778 steps, sampled episodes 83 long; 8 → 627 steps, 44 long. MountainCar with the energy bonus: 5 → 200 steps, 8 → 125 steps, and the policy stays random (entropy 1.099) in both: at this learning rate that is too few steps.
 
+**The three root causes:**
+1. **Too few gradient steps for the learning rate.** With one step per batch, Adam moves each weight by about one learning rate at most (5e-4, falling to 0); a few hundred steps left the networks almost at their start, while PPO takes 320 steps per batch.
+2. **No batch size works with one step per batch.** Large or whole-episode batches give variety but too few steps; 64-step batches give enough steps, but each is one stretch of one episode, so the updates are one-sided and noisy.
+3. **The critic never learned, so the advantages carried little signal.** Its small steps could not reach values of 10 to 100, counting the time limit as the end gave it contradictory targets, and its large gradient dominated the shared clip; with EV ≈ 0 the actor had only the next ~10 rewards to go on.
+
+*Not a cause, but misleading:* the near-uniform start (policy head ×0.01) made a barely moved policy look 50/50, and with 50/50 probabilities tiny differences decide the most likely action, so some most-likely-action replays looked trained when they were not.
+
 **What the experiment showed** (5 episodes per batch, one seed): the sampled policies stayed close to equal probabilities everywhere (entropy CartPole 0.69 → 0.64, double cart-pole 0.69 → 0.56, MountainCar 1.10 → 1.10, LunarLander 1.39 → 1.22 in 1M steps) and no run succeeded with sampled actions. The ×0.01 policy head only sets the start; the policies stayed near it because one small step per batch barely moves the networks. With a near-uniform policy the most likely action is decided by tiny differences, so a most-likely-action replay can look trained (CartPole at 0.54 / 0.46) while the policy is still close to random. The critic stayed flat throughout (EV ≈ 0).
 
 The first row is a trap: the policy is still 50/50, but its most likely action already balances the pole, because with near-zero logits the tiny differences decide it. Judge this variant by the sampled episodes and the entropy.
