@@ -12,7 +12,7 @@ import UChart, { LegendToggles, SeriesSpec } from "./UChart";
 
 // ------------------------------------------------------------------ data
 type Row = Record<string, number | null>;
-type AlgoKey = "batch_ac" | "epochs" | "ratio" | "clip" | "gae" | "ppo" | "ppo_1step";
+type AlgoKey = "batch_ac" | "epochs" | "ratio" | "clip" | "gae" | "ppo" | "ppo_1step" | "q_online" | "q_replay" | "dqn";
 
 interface AlgoConfig {
   batch_episodes?: number | null;
@@ -31,6 +31,19 @@ interface AlgoConfig {
   gae_lambda_end?: number | null; // λ rises from gae_lambda towards this
   trunc_as_end?: boolean;
   init?: "default" | "orthogonal"; // orthogonal: policy head ×0.01, so all actions start almost equally likely
+  // DQN (backend/rl/dqn.py)
+  kind?: "dqn";
+  lr?: number;
+  replay?: boolean;
+  buffer_size?: number;
+  batch_size?: number;
+  train_every?: number;
+  learning_starts?: number;
+  target_net?: boolean;
+  target_every?: number;
+  eps_start?: number;
+  eps_end?: number;
+  eps_fraction?: number;
   hidden: number;
   actor_lr: number;
   critic_lr: number;
@@ -228,6 +241,30 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; why: stri
     adds: "(This is an experimentation.) Not a rung: PPO's loss with ONE gradient step per batch of 5 complete episodes, so r = 1 and the clip never acts; one Adam for both networks with the gradient clipped together; lr falling to 0; λ rising 0.9 → 0.97; orthogonal start",
     why: "(This is an experimentation.) PPO's loss, GAE and critic target, but only one gradient step per batch of 5 complete episodes (as in batch AC), taken with the weights that collected it. There r = 1 exactly, so the clip never acts and the step is the plain −A·log π step of batch AC. Advantages are normalised over the batch and clipped to ±10. Actor and critic share one Adam (loss L_π + 0.5·L_V) and their gradients are clipped together to norm 0.5; the learning rate falls from 5·10⁻⁴ to 0 along a cosine, λ rises from 0.9 towards 0.98, the time limit counts as the end of an episode, and the networks start orthogonal with the policy head ×0.01. Adam moves each weight by about one learning rate per step at most, so with few batches the networks barely leave their start: whole-episode batches give variety but few steps (MountainCar: 5 × 200 = 1,000 steps per batch, 200 steps in 200k env steps). The table on its page lists every difference from PPO.",
     color: "#1f8fb3",
+  },
+  {
+    key: "q_online",
+    tab: "Q online",
+    name: "Q-learning with a network (DQN ladder, step 1)",
+    adds: "the DQN start: one Q-network, ε-greedy actions, learn from each new transition right away (minibatch of 1); the target r + γ·max Q(s′) uses the same network",
+    why: "Off-policy, value-based: one network outputs Q(s, a) for every action and the policy is argmax Q with ε-random actions (ε 1.0 → 0.05 over the first 10%). After every env step, one gradient step on that single transition towards y = r + γ·max Q(s′, ·), computed with the network being trained. Consecutive transitions are nearly the same state and the target moves with every update, so this is expected to be unstable: the two problems the next steps fix.",
+    color: "#86cbb9",
+  },
+  {
+    key: "q_replay",
+    tab: "+ replay",
+    name: "+ replay buffer",
+    adds: "keep the last 100,000 transitions; every 4 env steps, one gradient step on 64 random ones (after 1,000 steps)",
+    why: "Adds the replay buffer: transitions are stored instead of used once, and each gradient step learns from 64 random ones from anywhere in the last 100,000 steps. That breaks the correlation between consecutive states and reuses every transition about 16 times (64 samples per 4 new steps). Allowed only because the max target is off-policy: old experience from older, more random policies is still valid data. The target still uses the network being trained, so Q can chase itself upward.",
+    color: "#2fa88f",
+  },
+  {
+    key: "dqn",
+    tab: "DQN",
+    name: "DQN (+ target network)",
+    adds: "the target y = r + γ·max Q_θ⁻(s′) uses a frozen copy θ⁻, refreshed every 1,000 env steps",
+    why: "The classic DQN (2015): replay buffer plus a target network. A frozen copy of the Q-network computes the targets and is refreshed every 1,000 env steps, so for 1,000 steps each regression target stays put instead of moving with every update. The same idea as PPO computing its critic targets once per batch with V_old. Watch Q(s, a) against the return that really followed: without the copy it tends to drift above it.",
+    color: "#0b6b59",
   },
 ];
 const LADDER_BY = Object.fromEntries(LADDER.map((l) => [l.key, l])) as Record<AlgoKey, (typeof LADDER)[number]>;
@@ -570,6 +607,10 @@ const num = (v: number | null | undefined) => (v == null ? "never" : Math.round(
 
 /** How many gradient steps one batch gives, and how they are split. */
 function updates(c: AlgoConfig): { n: number | null; text: string } {
+  if (c.kind === "dqn") {
+    const every = c.train_every ?? 1;
+    return { n: Math.round(2048 / every), text: `1 gradient step every ${every} env step${every === 1 ? "" : "s"}, on ${c.replay ? `${c.batch_size} random transitions` : "the newest transition"}` };
+  }
   const e = c.epochs ?? 1;
   if (!c.minibatch) return { n: e, text: e === 1 ? "1 gradient step on the whole batch" : `${e} epochs × 1 gradient step on the whole batch` };
   if (c.batch_steps) {
@@ -580,6 +621,15 @@ function updates(c: AlgoConfig): { n: number | null; text: string } {
 }
 
 function tags(c: AlgoConfig): string[] {
+  if (c.kind === "dqn")
+    return [
+      "off-policy",
+      c.replay ? `replay buffer ${(c.buffer_size ?? 0).toLocaleString()}, minibatch ${c.batch_size}` : "no replay: the newest transition only",
+      `1 gradient step every ${c.train_every ?? 1} env step${(c.train_every ?? 1) === 1 ? "" : "s"}`,
+      c.target_net ? `target network, copied every ${(c.target_every ?? 0).toLocaleString()} steps` : "target from the network being trained",
+      `ε ${c.eps_start} → ${c.eps_end}`,
+      "Huber loss",
+    ];
   const lam = c.gae_lambda ?? 1;
   const u = updates(c);
   return [
@@ -1382,7 +1432,58 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
 }
 
 // ------------------------------------------------------------------ the selected algorithm
+function DQNUpdatePanel({ c }: { c: AlgoConfig }) {
+  const env = useEnv();
+  const nIn = env.state.filter((d) => !d.derived).length;
+  return (
+    <Panel
+      title="Update per env step"
+      help="DQN never stops to collect a batch: every env step adds one transition and, every few steps, one gradient step follows. For the logs one iteration = 2,048 env steps, the size of a PPO batch. See docs/dqn_explained.html for the whole method, compared with PPO."
+    >
+      <Kv k="act">
+        <Mono>a = argmax Q(s, ·)</Mono>, or a random action with probability ε
+        <div className="text-[11px] text-neutral-500">
+          ε falls from {c.eps_start} to {c.eps_end} over the first {Math.round((c.eps_fraction ?? 0.1) * 100)}% of the run
+        </div>
+      </Kv>
+      <Kv k="data">
+        {c.replay ? (
+          <>
+            replay buffer: the last {(c.buffer_size ?? 0).toLocaleString()} transitions (s, a, r, s′, end); a minibatch = {c.batch_size} random ones
+            <div className="text-[11px] text-neutral-500">
+              learning starts after {(c.learning_starts ?? 0).toLocaleString()} steps; each transition is used about {Math.round((c.batch_size ?? 1) / (c.train_every ?? 1))} times
+            </div>
+          </>
+        ) : (
+          <>only the newest transition, used once (no buffer)</>
+        )}
+      </Kv>
+      <Kv k="target">
+        <Mono>y = r + γ·max Q{c.target_net ? "_θ⁻" : "_θ"}(s′, ·)</Mono>
+        <div className="text-[11px] text-neutral-500">
+          {c.target_net
+            ? `θ⁻ = a frozen copy, refreshed every ${(c.target_every ?? 0).toLocaleString()} env steps`
+            : "computed with the network being trained (it moves with every update)"}
+          ; no V after a real end, a time limit still has a future
+        </div>
+      </Kv>
+      <Kv k="loss">
+        <Mono>Huber(Q_θ(s, a) − y)</Mono>, averaged over the minibatch
+        <div className="text-[11px] text-neutral-500">only the taken action&apos;s output gets a gradient; gradient norm clipped to 10</div>
+      </Kv>
+      <Kv k="steps">1 gradient step every {c.train_every ?? 1} env step{(c.train_every ?? 1) === 1 ? "" : "s"}</Kv>
+      <Kv k="network">
+        Q {nIn}→{c.hidden}→{env.actions.length} (one output per action){c.target_net ? " + its frozen copy" : ""} · adam · lr {c.lr}
+      </Kv>
+    </Panel>
+  );
+}
+
 function UpdatePanel({ c }: { c: AlgoConfig }) {
+  return c.kind === "dqn" ? <DQNUpdatePanel c={c} /> : <PPOUpdatePanel c={c} />;
+}
+
+function PPOUpdatePanel({ c }: { c: AlgoConfig }) {
   const env = useEnv();
   const nIn = env.state.filter((d) => !d.derived).length;
   const lam = c.gae_lambda ?? 1;
@@ -1790,6 +1891,26 @@ function AlgoDetail({ data }: { data: RunData }) {
                   ]
             }
           />
+          {data.settings.config.kind === "dqn" && (
+            <>
+              <Chart
+                title="Critic: Q against the return that really followed"
+                help="On the episodes that started and ended inside the iteration: the mean Q(s, a) the network predicts for the actions taken, and the mean discounted return that really followed. Q above the real return = overestimation, the problem the target network and Double DQN address."
+                rows={rows}
+                series={[
+                  { key: "q_pred", label: "predicted Q(s, a)", color: C.ink },
+                  { key: "g_real", label: "real return", color: C.pos },
+                ]}
+              />
+              <Chart
+                title="Exploration: ε"
+                help="The probability of a random action. It falls on a fixed schedule, not because of learning (PPO's randomness falls as π sharpens)."
+                rows={rows}
+                series={[{ key: "eps", label: "ε", color: C.ink }]}
+                range={[0, 1]}
+              />
+            </>
+          )}
           {env.success === "flag" && (
             <Chart
               title="Agent: how far right does it get?"
@@ -2034,7 +2155,7 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
               </span>
             )}
             {cfg &&
-              (["hidden", "actor_lr", "critic_lr", "gamma", "seed"] as const).map((k) => (
+              ((cfg.kind === "dqn" ? ["hidden", "lr", "gamma", "seed"] : ["hidden", "actor_lr", "critic_lr", "gamma", "seed"]) as (keyof AlgoConfig)[]).map((k) => (
                 <span key={k} className="rounded bg-neutral-100 px-1.5 py-0.5 tabular-nums">
                   {k} {String(cfg[k])}
                 </span>
