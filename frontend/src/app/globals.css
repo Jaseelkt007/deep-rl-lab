@@ -32,5 +32,10 @@ body {
 .uchart .u-legend th { font-weight: 400; color: #52514e; }
 .uchart .u-legend td { padding: 0 4px 0 0; color: #0b0b0b; font-variant-numeric: tabular-nums; }
 .uchart .u-legend .u-marker { width: 10px; height: 2px; border-radius: 1px; }
+/* legend entries are toggles: underline on hover, crossed out and faded when the line is hidden */
+.uchart .u-legend .u-series th { cursor: pointer; }
+.uchart .u-legend .u-series th:hover .u-label { text-decoration: underline; }
+.uchart .u-legend .u-series.u-off > * { opacity: 0.35; }
+.uchart .u-legend .u-series.u-off .u-label { text-decoration: line-through; }
 
 input[type="range"] { accent-color: #2a78d6; }
