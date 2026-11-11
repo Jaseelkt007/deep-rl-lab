@@ -112,6 +112,16 @@ ALGOS = {
 }
 
 
+def resolve_every(args) -> None:
+    """--eval-every / --record-every / --truth-every left unset: every 10 iterations, times 2,048 / batch size
+    for small step batches (32-step batches → every 640 iterations), so the number of evaluations, recordings
+    and critic checks stays about the same as with 2,048-step batches."""
+    scale = max(1, 2048 // args.batch_steps) if getattr(args, "batch_steps", None) else 1
+    for name in ("eval_every", "record_every", "truth_every"):
+        if getattr(args, name) is None:
+            setattr(args, name, 10 * scale)
+
+
 def make_session(algo: str, args):
     """Build the algorithm. Options left at None use the algorithm's own defaults."""
     pick = lambda value, default: default if value is None else value  # noqa: E731
@@ -506,7 +516,9 @@ def main() -> None:
     ap.add_argument("--gamma", type=float, default=0.99)
     ap.add_argument("--optimizer", choices=["adam", "sgd"], default="adam")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--eval-every", type=int, default=10)
+    ap.add_argument("--eval-every", type=int, default=None,
+                    help="evaluate every N iterations (default 10; with --batch-steps below 2,048: scaled up, so the "
+                         "run gets about as many evaluations as with 2,048-step batches)")
     ap.add_argument("--render-every", type=int, default=25, help="show the current policy playing every N iterations (0 = never)")
     ap.add_argument("--render-blocking", action="store_true",
                     help="play the window inside the training process (training waits), as before")
@@ -516,8 +528,10 @@ def main() -> None:
                          "0 = no windows at all")
     ap.add_argument("--plot", action=argparse.BooleanOptionalAction, default=True,
                     help="plot to <run folder>/plot.png and open it at the end")
-    ap.add_argument("--truth-every", type=int, default=10, help="ground-truth critic check every N iterations (0 = never)")
-    ap.add_argument("--record-every", type=int, default=10, help="save one episode of the current policy every N iterations")
+    ap.add_argument("--truth-every", type=int, default=None,
+                    help="ground-truth critic check every N iterations (0 = never; default 10, scaled like --eval-every)")
+    ap.add_argument("--record-every", type=int, default=None,
+                    help="save one episode of the current policy every N iterations (default 10, scaled like --eval-every)")
     ap.add_argument("--open", action=argparse.BooleanOptionalAction, default=True, help="open the plot at the end")
     ap.add_argument("--quality-steps", type=int, default=None,
                     help="length of the final-policy test (default: 10,000 for the cart-poles, 200 for MountainCar)")
@@ -526,6 +540,7 @@ def main() -> None:
     ap.add_argument("--wind-power", type=float, default=None, help="lunarlander_wind: steady wind strength (default 15)")
     ap.add_argument("--turbulence", type=float, default=None, help="lunarlander_wind: random gusts (default 1.5)")
     args = ap.parse_args()
+    resolve_every(args)
     if args.render_every_steps == 0:  # 0 means no windows, not "fall back to --render-every"
         args.render_every = 0
     global SPEC
