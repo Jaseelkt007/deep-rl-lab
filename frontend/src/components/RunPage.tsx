@@ -1034,41 +1034,37 @@ interface SideView {
   ep: Episode;
 }
 
-/** Two recorded episodes played together, one shared play / pause / slider. */
-function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
+/** Two or three recorded episodes played together, one shared play / pause / slider. The component is
+ *  remounted when any episode changes (key), so the episodes and labels it was given stay fixed. */
+function MultiPlayer({ sides }: { sides: SideView[] }) {
   const env = useEnv();
-  const n = Math.max(a.ep.actions.length, b.ep.actions.length);
+  const [fixed] = useState(sides); // ep / label / color for the chart; `sides` itself may update its sub-line
+  const n = Math.max(...fixed.map((sd) => sd.ep.actions.length));
   const pb = usePlayback(n);
   const actions = env.actions;
-  const { ep: epA, label: labelA, color: colorA } = a;
-  const { ep: epB, label: labelB, color: colorB } = b;
   const trace = useMemo(() => {
     const x = Array.from({ length: n }, (_, k) => k + 1);
-    // per side: the cart dashed, the first angle solid, a second angle dotted
+    // per side: the first trace dashed, the second solid, a third dotted
     const dashes: (number[] | undefined)[] = [[5, 3], undefined, [1.5, 2.5]];
-    const sides = [
-      { ep: epA, label: labelA, color: colorA },
-      { ep: epB, label: labelB, color: colorB },
-    ];
     const ys: (number | null)[][] = [];
     const series: SeriesSpec[] = [];
     env.traces.forEach((t, ti) =>
-      sides.forEach((sd) => {
+      fixed.forEach((sd) => {
         ys.push(x.map((_, k) => (k < sd.ep.states.length ? t.f(sd.ep.states[k]) : null)));
-        series.push({ label: `${sd.label}: ${t.label}`, color: sd.color, width: ti === 0 ? 1.25 : 1.75, dash: dashes[ti] });
+        series.push({ label: `${sd.label}: ${t.label}`, color: sd.color, width: ti === 0 ? 1.25 : 1.75, dash: dashes[ti], group: sd.label });
       }),
     );
     return { x, ys, series };
-  }, [epA, epB, labelA, labelB, colorA, colorB, n, env]);
+  }, [fixed, n, env]);
   // training episodes: share of steps where the sampled action was NOT the most likely one (exploration)
   const explored = useMemo(
-    () => [epA, epB].map((ep) => (ep.kind === "training" ? ep.actions.filter((a, k) => a !== argmax(ep.probs[k])).length / ep.actions.length : null)),
-    [epA, epB],
+    () => fixed.map((sd) => (sd.ep.kind === "training" ? sd.ep.actions.filter((a, k) => a !== argmax(sd.ep.probs[k])).length / sd.ep.actions.length : null)),
+    [fixed],
   );
   return (
     <div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {[a, b].map((sd, k) => {
+      <div className={`grid grid-cols-1 gap-4 ${sides.length >= 3 ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
+        {sides.map((sd, k) => {
           const len = sd.ep.actions.length;
           const j = Math.min(pb.i, len - 1);
           const s = sd.ep.states[j];
@@ -1095,7 +1091,7 @@ function DualPlayer({ a, b }: { a: SideView; b: SideView }) {
                 <EnvView envId={env.envId} step={step} trail={[]} actionNames={actions} />
                 {badge && (
                   <div
-                    className={`absolute left-1/2 top-2 -translate-x-1/2 rounded px-2 py-0.5 text-[11.5px] font-medium text-white ${badge.ok ? "bg-[#1baf7a]" : "bg-[#e34948]"}`}
+                    className={`absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded px-2 py-0.5 text-[11.5px] font-medium text-white ${badge.ok ? "bg-[#1baf7a]" : "bg-[#e34948]"}`}
                   >
                     {badge.text}
                   </div>
@@ -1130,43 +1126,54 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
   const env = useEnv();
   const have = LADDER.filter((l) => algos.some((a) => a.algo === l.key)).map((l) => l.key);
   const by = Object.fromEntries(algos.map((a) => [a.algo, a])) as Partial<Record<AlgoKey, AlgoSummary>>;
-  const [leftPick, setLeft] = useState<Side | null>(null);
-  const [rightPick, setRight] = useState<Side | null>(null);
+  // what each side shows (null = the default); two sides, or three after "+ third"
+  const [picks, setPicks] = useState<(Side | null)[]>([null, null]);
   const [pick, setPick] = useState<IterPick>("final");
-  // match the two sides by environment steps (the same experience) or by iteration number
+  // match the sides by environment steps (the same experience) or by iteration number
   const [match, setMatch] = useState<"steps" | "iter">("steps");
   const [mode, setMode] = useState<Mode>("greedy");
   const [stepPick, setStepPick] = useState<IterPick>("final");
   const [lists, setLists] = useState<Record<string, EpisodeInfo[]>>({});
   const [eps, setEps] = useState<Record<string, Episode>>({});
 
-  // defaults: batch actor-critic on the left, the algorithm selected below on the right
-  const left: Side = leftPick ?? (have.includes("batch_ac") ? "batch_ac" : (have[0] ?? "good"));
-  const right: Side = rightPick ?? (selected !== left && have.includes(selected) ? selected : (have.find((k) => k !== left) ?? "good"));
+  // defaults: batch actor-critic first, then the algorithm selected below, then the highest other rung
+  const sides: Side[] = [];
+  picks.forEach((p, k) => {
+    if (p) {
+      sides.push(p);
+      return;
+    }
+    const used = (x: Side) => sides.includes(x);
+    const d: Side =
+      k === 0
+        ? have.includes("batch_ac") ? "batch_ac" : (have[0] ?? "good")
+        : k === 1 && !used(selected) && have.includes(selected)
+          ? selected
+          : ([...have].reverse().find((x) => !used(x)) ?? "good");
+    sides.push(d);
+  });
+  const setSide = (k: number, v: Side) => setPicks((prev) => prev.map((p, i) => (i === k ? v : p)));
   const source = (s: Side): AlgoKey | undefined => (s === "good" ? have[0] : s); // the good policy is saved with every run
   const ver = (k: AlgoKey | undefined) => (k ? `${k}|${by[k]?.status.started}|${by[k]?.status.iter}` : "");
-  const srcL = source(left);
-  const srcR = source(right);
-  const verL = ver(srcL);
-  const verR = ver(srcR);
+  const srcs = sides.map(source);
+  const vers = srcs.map(ver);
+  const versKey = vers.join("~");
 
   // the list of recorded episodes of each side; refetched when that run moves on
   useEffect(() => {
     let alive = true;
-    for (const [k, v] of [
-      [srcL, verL],
-      [srcR, verR],
-    ] as const) {
-      if (!k || lists[v]) continue;
+    srcs.forEach((k, i) => {
+      const v = vers[i];
+      if (!k || lists[v]) return;
       fetch(cliUrl(`run/${k}/episodes`, env.key))
         .then((r) => (r.ok ? r.json() : null))
         .then((d: EpisodeInfo[] | null) => alive && d && setLists((prev) => ({ ...prev, [v]: d })))
         .catch(() => {});
-    }
+    });
     return () => {
       alive = false;
     };
-  }, [srcL, srcR, verL, verR, lists, env]);
+  }, [versKey, lists, env]); // eslint-disable-line react-hooks/exhaustive-deps -- versKey covers srcs and vers
 
   const learned = (s: Side) => (s === "good" ? [] : (lists[ver(s)] ?? []).filter((e) => ofKind(e, mode)));
   const stepMaps = useMemo(
@@ -1191,31 +1198,29 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
     }
     return best;
   };
-  const infoL = resolve(left);
-  const infoR = resolve(right);
-  const keyL = infoL && srcL ? `${verL}|${infoL.name}` : "";
-  const keyR = infoR && srcR ? `${verR}|${infoR.name}` : "";
+  const infos = sides.map(resolve);
+  const keys = infos.map((info, i) => (info && srcs[i] ? `${vers[i]}|${info.name}` : ""));
+  const keysKey = keys.join("~");
 
-  // the two episodes themselves (cached)
+  // the episodes themselves (cached)
   useEffect(() => {
     let alive = true;
-    for (const [k, src, info] of [
-      [keyL, srcL, infoL],
-      [keyR, srcR, infoR],
-    ] as const) {
-      if (!k || !src || !info || eps[k]) continue;
+    keys.forEach((k, i) => {
+      const src = srcs[i];
+      const info = infos[i];
+      if (!k || !src || !info || eps[k]) return;
       fetch(cliUrl(`run/${src}/episode/${info.name}`, env.key))
         .then((r) => (r.ok ? r.json() : null))
         .then((e: Episode | null) => alive && e && setEps((prev) => ({ ...prev, [k]: e })))
         .catch(() => {});
-    }
+    });
     return () => {
       alive = false;
     };
-  }, [keyL, keyR, srcL, srcR, infoL, infoR, eps, env]);
+  }, [keysKey, eps, env]); // eslint-disable-line react-hooks/exhaustive-deps -- keysKey covers keys, srcs and infos
 
-  // iterations recorded in either run (a run's own last iteration is under "final")
-  const sets = [left, right].filter((s) => s !== "good").map((s) => learned(s).map((e) => e.iter));
+  // iterations recorded in any of the runs (a run's own last iteration is under "final")
+  const sets = sides.filter((s) => s !== "good").map((s) => learned(s).map((e) => e.iter));
   const finals = sets.map((s) => s.at(-1));
   const iters = Array.from(new Set(sets.flat()))
     .sort((x, y) => x - y)
@@ -1232,8 +1237,7 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
       ep,
     };
   };
-  const epL = eps[keyL];
-  const epR = eps[keyR];
+  const loaded = keys.map((k) => eps[k]);
   const missing = (s: Side, info: EpisodeInfo | null | undefined) =>
     info === null && s !== "good"
       ? match === "iter"
@@ -1242,9 +1246,10 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
           ? `${LADDER_BY[s].tab}: no training episodes recorded in this run (re-run it to get them)`
           : `${LADDER_BY[s].tab}: no recorded episode yet`
       : null;
+  const problems = sides.map((s, i) => missing(s, infos[i])).filter((m): m is string => !!m);
 
-  // environment-step marks: about 10 even points up to the longer run, the nearest 1/2/5 × 10ⁿ apart
-  const lastSteps = [left, right]
+  // environment-step marks: about 10 even points up to the longest run, the nearest 1/2/5 × 10ⁿ apart
+  const lastSteps = sides
     .filter((s): s is AlgoKey => s !== "good")
     .map((s) => {
       const last = learned(s).at(-1);
@@ -1267,16 +1272,34 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
       <option value="good">good policy (hand-written)</option>
     </select>
   );
+  const howMany = sides.length === 3 ? "three" : "two";
 
   return (
     <Panel
-      title={mode === "greedy" ? "Side by side: two policies, same start" : "Side by side: two policies, real training episodes"}
-      help="Most likely action: every recording starts from the same state and always takes the most likely action, so two policies can be compared directly. As in training: a real episode from that iteration's batch, with the actions as they were sampled (so sometimes not the most likely one: that is exploration); each starts where that episode started. Pick what goes left and right. Same env steps: each side plays its recording closest to the same amount of experience (fair between algorithms, whose iterations differ: a PPO iteration is 2,048 steps, a collapsed run's iteration can be 40). Same iteration: the same iteration number on both sides. Each side shows its iteration and how many environment steps it had trained on."
+      title={mode === "greedy" ? `Side by side: ${howMany} policies, same start` : `Side by side: ${howMany} policies, real training episodes`}
+      help="Most likely action: every recording starts from the same state and always takes the most likely action, so the policies can be compared directly. As in training: a real episode from that iteration's batch, with the actions as they were sampled (so sometimes not the most likely one: that is exploration); each starts where that episode started. Pick what goes on each side; '+ third' adds a third side once two or more runs exist (× removes it). Same env steps: each side plays its recording closest to the same amount of experience (fair between algorithms, whose iterations differ: a PPO iteration is 2,048 steps, a collapsed run's iteration can be 40). Same iteration: the same iteration number on every side. Each side shows its iteration and how many environment steps it had trained on."
     >
       <div className="mb-3 flex flex-wrap items-center gap-2 text-[12px]">
-        {select(left, setLeft)}
-        <span className="text-neutral-400">vs</span>
-        {select(right, setRight)}
+        {sides.map((s, k) => (
+          <span key={k} className="flex items-center gap-1">
+            {k > 0 && <span className="text-neutral-400">vs</span>}
+            {select(s, (v) => setSide(k, v))}
+            {k === 2 && (
+              <button
+                className="rounded px-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                title="remove the third side"
+                onClick={() => setPicks((prev) => prev.slice(0, 2))}
+              >
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        {sides.length < 3 && have.length >= 2 && (
+          <button className="rounded border border-dashed border-neutral-300 px-1.5 py-0.5 text-neutral-500 hover:border-neutral-500" onClick={() => setPicks((prev) => [...prev, null])}>
+            + third
+          </button>
+        )}
         <ModeSwitch mode={mode} setMode={setMode} />
         <span className="ml-3 flex rounded bg-neutral-100 p-0.5 text-[11px]">
           {(
@@ -1325,14 +1348,14 @@ function SideBySide({ algos, selected }: { algos: AlgoSummary[]; selected: AlgoK
           </select>
         )}
       </div>
-      {missing(left, infoL) || missing(right, infoR) ? (
+      {problems.length > 0 ? (
         <div className="py-8 text-center text-[12px] text-neutral-500">
-          {[missing(left, infoL), missing(right, infoR)].filter(Boolean).map((m) => (
+          {problems.map((m) => (
             <div key={m}>{m}</div>
           ))}
         </div>
-      ) : epL && epR && infoL && infoR ? (
-        <DualPlayer key={`${keyL}::${keyR}`} a={view(left, infoL, epL)} b={view(right, infoR, epR)} />
+      ) : loaded.every(Boolean) && infos.every(Boolean) ? (
+        <MultiPlayer key={keysKey} sides={sides.map((s, i) => view(s, infos[i]!, loaded[i]!))} />
       ) : (
         <div className="py-8 text-center text-[12px] text-neutral-400">loading…</div>
       )}
