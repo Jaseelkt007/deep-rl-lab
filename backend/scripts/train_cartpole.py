@@ -602,6 +602,9 @@ def train(algo: str, args) -> None:
         while not last:
             it += 1
             tr = session.iterate()  # collect a batch → gradient step(s) → discard
+            # batch AC's session (shared with the Learn page) keeps every iteration's full trace for stepping
+            # back; a long terminal run must not (it grew to 2.4 GB on LunarLander). Keep only this one.
+            getattr(session, "traces", {}).clear()
             s = tr["summary"]
             last = env_steps + s["steps"] >= args.budget or (args.iters is not None and it >= args.iters)
             p_old = np.array(tr["actor"]["probs_before"])  # π_k on the batch states
