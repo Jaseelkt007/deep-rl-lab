@@ -17,7 +17,8 @@ to PPO. No web server needed.
     ppo_1step PPO with ONE gradient step per 2,048-step batch (so r = 1 and the clip never acts); one Adam for
               both networks (loss L_π + 0.5·L_V, gradients clipped together to norm 0.5), lr 5e-4 falling along
               a cosine to 0, λ rising 0.9 → 0.98, advantages normalised over the batch and clipped to ±10,
-              time limit = end of episode. Not a rung: compare it with batch_ac (1 step) and ppo.
+              time limit = end of episode, orthogonal start (policy head ×0.01). Not a rung: compare it
+              with batch_ac (1 step) and ppo. Needs small batches to learn: --batch-steps 128 (or 32).
 Every algorithm trains for the same --budget of environment steps (default 200,000).
 
 The LATEST run of each algorithm is saved in runs/cli/<algo>/ (double cart-pole: runs/double_cartpole/<algo>/),
@@ -121,8 +122,11 @@ def make_session(algo: str, args):
                           shaping=SPEC.shaping, env_kwargs=SPEC.env_kwargs)
         return ExplainSession(cfg), cfg.model_dump()
     base = {**PPOConfig().model_dump(), **VARIANTS[algo]}
+    if args.batch_steps is not None and not base["batch_steps"]:
+        raise SystemExit(f"--batch-steps only applies to the step-batch algorithms (ppo, ppo_1step), not {algo}")
     cfg = PPOConfig(**{**base, "env_id": SPEC.env_id, "shaping": SPEC.shaping, "env_kwargs": SPEC.env_kwargs, "seed": args.seed, "gamma": args.gamma, "hidden": pick(args.hidden, SPEC.hidden),
                        "total_steps": args.budget,
+                       **({"batch_steps": args.batch_steps} if args.batch_steps is not None else {}),
                        "actor_lr": pick(args.actor_lr, base["actor_lr"]), "critic_lr": pick(args.critic_lr, base["critic_lr"]),
                        **({"batch_episodes": args.batch} if args.batch is not None and base["batch_episodes"] else {})})
     return PPOSession(cfg), cfg.model_dump()
@@ -493,6 +497,9 @@ def main() -> None:
                     help="environment steps to train for, the same for every algorithm (default: 200,000; LunarLander 1,000,000)")
     ap.add_argument("--iters", type=int, default=None, help="optional maximum number of iterations")
     ap.add_argument("--batch", type=int, default=None, help="episodes per batch (episode-batch algorithms)")
+    ap.add_argument("--batch-steps", type=int, default=None,
+                    help="steps per batch (ppo, ppo_1step; default 2,048). With 1 gradient step per batch, smaller "
+                         "batches = more steps: 200k env steps in batches of 128 = 1,563 gradient steps")
     ap.add_argument("--hidden", type=int, default=None, help="hidden units (one hidden layer); default 8, LunarLander 64")
     ap.add_argument("--actor-lr", type=float, default=None, help="default: the algorithm's own")
     ap.add_argument("--critic-lr", type=float, default=None, help="default: the algorithm's own")
