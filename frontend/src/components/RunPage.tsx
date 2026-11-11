@@ -12,7 +12,7 @@ import UChart, { LegendToggles, SeriesSpec } from "./UChart";
 
 // ------------------------------------------------------------------ data
 type Row = Record<string, number | null>;
-type AlgoKey = "batch_ac" | "epochs" | "ratio" | "clip" | "gae" | "ppo";
+type AlgoKey = "batch_ac" | "epochs" | "ratio" | "clip" | "gae" | "ppo" | "ppo_1step";
 
 interface AlgoConfig {
   batch_episodes?: number | null;
@@ -23,6 +23,13 @@ interface AlgoConfig {
   clip?: number | null;
   gae_lambda?: number;
   adv_norm?: boolean;
+  adv_clip?: number | null;
+  joint_opt?: boolean; // one Adam for both networks, loss L_π + vf_coef·L_V
+  vf_coef?: number;
+  max_grad_norm?: number | null;
+  lr_decay?: "none" | "cosine";
+  gae_lambda_end?: number | null; // λ rises from gae_lambda towards this
+  trunc_as_end?: boolean;
   hidden: number;
   actor_lr: number;
   critic_lr: number;
@@ -212,6 +219,14 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; why: stri
     adds: "fixed 2,048-step batches, minibatches of 64, advantages normalised per minibatch, smaller learning rates",
     why: "Proximal Policy Optimization: everything above (epochs, ratio, clip, GAE) plus the settings it is normally run with: fixed batches of 2,048 steps, 10 epochs over minibatches of 64 (320 small gradient steps per batch), advantages normalised per minibatch, and smaller learning rates. Many small, controlled steps per batch instead of a few large ones.",
     color: C.ink,
+  },
+  {
+    key: "ppo_1step",
+    tab: "PPO, 1 step",
+    name: "PPO with 1 gradient step per batch",
+    adds: "not a rung: PPO's loss with ONE gradient step per 2,048-step batch (so r = 1 and the clip never acts), one Adam for both networks with the gradient clipped together, lr falling to 0, λ rising 0.9 → 0.98",
+    why: "PPO's loss, GAE and critic target, but only one gradient step per batch, taken with the weights that collected it. There r = 1 exactly, so the clip never acts and the step is the plain −A·log π step of batch AC, with GAE advantages normalised over the batch and clipped to ±10. Actor and critic share one Adam (loss L_π + 0.5·L_V) and their gradients are clipped together to norm 0.5; the learning rate falls from 5·10⁻⁴ to 0 along a cosine and λ rises from 0.9 towards 0.98 over the run. Compare it with batch AC (also one step per batch) and with PPO (320 steps per batch).",
+    color: "#1f8fb3",
   },
 ];
 const LADDER_BY = Object.fromEntries(LADDER.map((l) => [l.key, l])) as Record<AlgoKey, (typeof LADDER)[number]>;
@@ -573,6 +588,8 @@ function tags(c: AlgoConfig): string[] {
     lam === 1 ? "Monte Carlo returns" : `GAE λ ${lam}`,
     c.clip ? `clip ε ${c.clip}` : c.ratio ? "ratio r·A, no clip" : (c.epochs ?? 1) > 1 ? "plain −A·log π, no ratio" : "plain −A·log π",
     ...(c.adv_norm ? ["normalised advantages"] : []),
+    ...(c.joint_opt ? [`one optimiser, gradient clip ${c.max_grad_norm ?? "none"}`] : []),
+    ...(c.lr_decay === "cosine" ? ["lr → 0 (cosine)"] : []),
   ];
 }
 
@@ -1394,7 +1411,11 @@ function UpdatePanel({ c }: { c: AlgoConfig }) {
             <Mono>δ = r + γV(s′) − V(s)</Mono>
             <br />
             <Mono>A = Σ (γλ)ᵏ δ</Mono>
-            <div className="text-[11px] text-neutral-500">λ = {lam}: between one-step TD (λ = 0) and G − V (λ = 1)</div>
+            <div className="text-[11px] text-neutral-500">
+              {c.gae_lambda_end != null
+                ? `λ rises from ${lam} towards ${c.gae_lambda_end} over the run (about 0.97 at the end)`
+                : `λ = ${lam}: between one-step TD (λ = 0) and G − V (λ = 1)`}
+            </div>
           </>
         )}
       </Kv>
@@ -1406,6 +1427,7 @@ function UpdatePanel({ c }: { c: AlgoConfig }) {
             <Mono>target = A + V_old(s)</Mono>
             <br />
             <Mono>L_V = ½(target − V)²</Mono>
+            {c.trunc_as_end && <div className="text-[11px] text-neutral-500">the time limit counts as the end: no V after it</div>}
           </>
         )}
       </Kv>
@@ -1435,13 +1457,30 @@ function UpdatePanel({ c }: { c: AlgoConfig }) {
           </>
         )}
       </Kv>
-      {c.adv_norm && <Kv k="normalise">A → mean 0, std 1 in each minibatch</Kv>}
+      {c.adv_norm && (
+        <Kv k="normalise">
+          A → mean 0, std 1 {c.minibatch ? "in each minibatch" : "over the whole batch"}
+          {c.adv_clip != null && <>, then clipped to ±{c.adv_clip}</>}
+        </Kv>
+      )}
       <Kv k="steps">
         {u.text}
-        {u.n != null && u.n > 1 && <span className="text-neutral-500"> = {u.n} gradient steps</span>} (critic and actor each)
+        {u.n != null && u.n > 1 && <span className="text-neutral-500"> = {u.n} gradient steps</span>}{" "}
+        {c.joint_opt ? "(one step for both networks together)" : "(critic and actor each)"}
+        {u.n === 1 && c.ratio && <div className="text-[11px] text-neutral-500">r = 1 in that one step, so the clip never acts</div>}
       </Kv>
       <Kv k="networks">
-        actor {nIn}→{c.hidden}→{env.actions.length} · critic {nIn}→{c.hidden}→1 · {c.optimizer ?? "adam"} · lr {c.actor_lr} / {c.critic_lr}
+        actor {nIn}→{c.hidden}→{env.actions.length} · critic {nIn}→{c.hidden}→1 ·{" "}
+        {c.joint_opt ? (
+          <>
+            one Adam for both: loss L_π + {c.vf_coef ?? 0.5}·L_V, gradients clipped together to norm {c.max_grad_norm ?? "∞"} · lr {c.actor_lr}
+            {c.lr_decay === "cosine" && " falling to 0 (cosine)"}
+          </>
+        ) : (
+          <>
+            {c.optimizer ?? "adam"} · lr {c.actor_lr} / {c.critic_lr}
+          </>
+        )}
       </Kv>
       <div className={`pt-1.5 text-right ${STATIC ? "hidden" : ""}`}>
         <Link href="/learn" className="text-[12px] text-[#2a78d6] hover:underline">
