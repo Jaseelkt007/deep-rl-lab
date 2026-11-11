@@ -110,7 +110,7 @@ A second environment, `backend/rl/double_cartpole.py`: the cart carries **two st
 
 ```bash
 cd backend
-uv run python scripts/train_cartpole.py --env double_cartpole --algo ppo      # or batch_ac, epochs, ratio, clip, gae
+uv run python scripts/train_cartpole.py --env double_cartpole --algo ppo      # or batch_ac, epochs, ratio, clip, gae, ppo_1step
 ```
 Runs are saved in `runs/double_cartpole/<algo>/` and shown on **http://localhost:3000/double** (same panels as the CartPole page).
 
@@ -126,7 +126,7 @@ Random pushes never reach the flag in 200 steps (0%, and 4% even with 5,000 step
 
 ```bash
 cd backend
-uv run python scripts/train_cartpole.py --env mountaincar --algo batch_ac      # … epochs, ratio, clip, gae, ppo
+uv run python scripts/train_cartpole.py --env mountaincar --algo batch_ac      # … epochs, ratio, clip, gae, ppo, ppo_1step
 ```
 Runs: `runs/mountaincar/<algo>/`; page: **http://localhost:3000/mountaincar**.
 
@@ -138,7 +138,7 @@ Random pushes score about −210; Gymnasium's hand-written heuristic scores 262 
 
 ```bash
 cd backend
-uv run python scripts/train_cartpole.py --env lunarlander --algo ppo --render-every 20     # or batch_ac, epochs, ratio, clip, gae
+uv run python scripts/train_cartpole.py --env lunarlander --algo ppo --render-every 20     # or batch_ac, epochs, ratio, clip, gae, ppo_1step
 ```
 Runs: `runs/lunarlander/<algo>/`; page: **http://localhost:3000/lunarlander**.
 
