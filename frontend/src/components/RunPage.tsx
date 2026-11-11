@@ -1509,9 +1509,18 @@ const TABLE: [string, string, number][] = [
   ["noise", "noise floor", 2],
 ];
 
-function Logs({ rows }: { rows: Row[] }) {
+const LOG_ROWS = 300; // a table row per iteration would be 15,625 rows for a 64-step-batch run: the tab would freeze
+
+function Logs({ rows: all }: { rows: Row[] }) {
+  const every = Math.max(1, Math.ceil(all.length / LOG_ROWS));
+  const rows = every === 1 ? all : all.filter((_, i) => i % every === 0 || i === all.length - 1);
   return (
     <div className="max-h-80 overflow-auto">
+      {every > 1 && (
+        <div className="px-2 pb-1 text-[11px] text-neutral-500">
+          every {every}th of {all.length.toLocaleString()} iterations (and the last); the full log is log.csv in the run folder
+        </div>
+      )}
       <table className="w-full text-right text-[12px] tabular-nums">
         <thead className="sticky top-0 bg-white text-[11px] text-neutral-500">
           <tr>
