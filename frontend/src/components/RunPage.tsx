@@ -224,9 +224,9 @@ const LADDER: { key: AlgoKey; tab: string; name: string; adds: string; why: stri
   {
     key: "ppo_1step",
     tab: "PPO, 1 step",
-    name: "PPO with 1 gradient step per batch",
-    adds: "not a rung: PPO's loss with ONE gradient step per 2,048-step batch (so r = 1 and the clip never acts), one Adam for both networks with the gradient clipped together, lr falling to 0, λ rising 0.9 → 0.98",
-    why: "PPO's loss, GAE and critic target, but only one gradient step per batch, taken with the weights that collected it. There r = 1 exactly, so the clip never acts and the step is the plain −A·log π step of batch AC, with GAE advantages normalised over the batch and clipped to ±10. Actor and critic share one Adam (loss L_π + 0.5·L_V) and their gradients are clipped together to norm 0.5; the learning rate falls from 5·10⁻⁴ to 0 along a cosine and λ rises from 0.9 towards 0.98 over the run. Compare it with batch AC (also one step per batch) and with PPO (320 steps per batch). Adam moves each weight by about one learning rate per step at most, so it needs small batches (--batch-steps 128 or 32) to get enough steps; with 2,048-step batches the policy stays almost 50/50, and only the most likely action can look trained.",
+    name: "PPO with 1 gradient step per batch (This is an experimentation.)",
+    adds: "(This is an experimentation.) Not a rung: PPO's loss with ONE gradient step per 64-step batch, so r = 1 and the clip never acts; one Adam for both networks with the gradient clipped together; lr falling to 0; λ rising 0.9 → 0.97; orthogonal start",
+    why: "(This is an experimentation.) PPO's loss, GAE and critic target, but only one gradient step per 64-step batch, taken with the weights that collected it. There r = 1 exactly, so the clip never acts and the step is the plain −A·log π step of batch AC. Advantages are normalised over the batch and clipped to ±10. Actor and critic share one Adam (loss L_π + 0.5·L_V) and their gradients are clipped together to norm 0.5; the learning rate falls from 5·10⁻⁴ to 0 along a cosine, λ rises from 0.9 towards 0.98, the time limit counts as the end of an episode, and the networks start orthogonal with the policy head ×0.01. Small batches because Adam moves each weight by about one learning rate per step at most: 2,048-step batches would give only 98 steps in 200k env steps, and the networks would barely leave their start. The table on its page lists every difference from PPO.",
     color: "#1f8fb3",
   },
 ];
@@ -1640,11 +1640,63 @@ function InsideIteration({ data }: { data: RunData }) {
   );
 }
 
+/** What differs between our PPO and the one-step experiment, setting by setting. */
+const ONE_STEP_DIFF: [string, string, string][] = [
+  ["batch", "2,048 steps", "64 steps"],
+  ["gradient steps per batch", "320 (10 epochs × 32 minibatches of 64)", "1, on the whole batch"],
+  ["ratio r and clip", "after the first step r moves away from 1; the clip stops it past 0.8 / 1.2", "r = 1 in the only step, so the clip never acts: the step is the plain −A·log π"],
+  ["GAE λ", "0.95, fixed", "rises from 0.9 towards 0.98 (about 0.97 at the end)"],
+  ["advantage normalisation", "per minibatch of 64", "over the whole batch, then clipped to ±10"],
+  ["optimiser", "two Adams: actor lr 1e-3, critic lr 3e-3, no gradient clipping", "one Adam (eps 1e-5) for both networks: loss L_π + 0.5·L_V, gradients clipped together to norm 0.5"],
+  ["learning rate", "constant", "5·10⁻⁴, falling to 0 along a cosine over the run"],
+  ["time limit", "the future after the cut is filled in with V", "counts as the end of the episode: no V after it"],
+  ["starting weights", "PyTorch's default", "orthogonal: hidden ×√2, policy head ×0.01 (all actions start almost equally likely), value head ×1, biases 0"],
+];
+
+function OneStepDiff() {
+  return (
+    <Panel
+      title="PPO, 1 step vs PPO (This is an experimentation.)"
+      help="Same in both: the clipped loss −min(r·A, clip(r, 0.8, 1.2)·A), GAE advantages, the critic target A + V_old with L_V = ½(target − V)², no entropy bonus, the network size and γ. Everything else is listed here."
+    >
+      <table className="w-full text-left text-[12px]">
+        <thead className="text-[11px] text-neutral-500">
+          <tr>
+            <th className="py-1 pr-3 font-normal" />
+            <th className="py-1 pr-3 font-normal">PPO</th>
+            <th className="py-1 font-normal">PPO, 1 step (defaults; the panels below show this run&apos;s own settings)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ONE_STEP_DIFF.map(([k, a, b]) => (
+            <tr key={k} className="border-t border-neutral-100 align-top">
+              <td className="py-1 pr-3 text-neutral-500">{k}</td>
+              <td className="py-1 pr-3">{a}</td>
+              <td className="py-1">{b}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="mt-2 text-[11.5px] text-neutral-500">
+        Same in both: the clipped loss, GAE, the critic target A + V_old, no entropy bonus, the network size and γ. Why 64-step
+        batches: Adam moves each weight by about one learning rate per step at most, so with 2,048-step batches (98 steps in
+        200k env steps) the networks barely leave their start. Judge it by the sampled episodes and the entropy: with a
+        near-uniform start, the most likely action can look trained while the policy is still close to random.
+      </div>
+    </Panel>
+  );
+}
+
 function AlgoDetail({ data }: { data: RunData }) {
   const env = useEnv();
   const rows = data.rows;
   return (
     <>
+      {data.settings.algo === "ppo_1step" && (
+        <div className="mb-3">
+          <OneStepDiff />
+        </div>
+      )}
       <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2">
           <UpdatePanel c={data.settings.config} />
           <Panel title="Environment" help="What the agent observes and does. The state is fully observed; each number is divided by its range before going into the networks.">
