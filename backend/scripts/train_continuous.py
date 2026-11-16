@@ -1,13 +1,17 @@
-"""Train on a continuous-action MuJoCo task from the terminal (first: PPO with a Gaussian policy on Walker2d).
+"""Train on a continuous-action MuJoCo task from the terminal (Walker2d): PPO, then the off-policy ladder.
 
-    uv run python scripts/train_continuous.py --algo ppo                      # 1M steps, window every 100k steps
-    uv run python scripts/train_continuous.py --algo ppo --render-every-steps 0 --budget 300000
+    uv run python scripts/train_continuous.py --algo ppo                      # 1M steps (~17 min), window every 100k steps
+    uv run python scripts/train_continuous.py --algo ddpg                     # 1M steps (~2 h: one update per env step)
+    uv run python scripts/train_continuous.py --algo ddpg --threads 4         # faster updates, if the CPU is free
     uv run python scripts/train_continuous.py --help
 
 --algo
     ppo   PPO with a Gaussian policy (rl/ppo_continuous.py): the actor outputs a mean torque per joint, σ is
           learned per joint; 2,048-step batches, 10 epochs × minibatches of 64, clip 0.2, GAE 0.95, observation
           normalisation and reward scaling, one Adam (lr 3e-4 → 0), gradient clip 0.5
+    ddpg  DDPG (rl/offpolicy.py): DQN for continuous actions. A deterministic actor μ(s) (tanh) learns the argmax of
+          a critic Q(s, a); replay buffer 1M, minibatches of 256, one update per env step, soft target networks
+          (τ = 0.005), exploration noise N(0, 0.1²) added to μ(s), 25,000 random steps first. 2×256 ReLU networks.
 
 The LATEST run of each algorithm is saved in runs/<env>/<algo>/, replaced by the next run:
     log.csv, settings.json, status.json, plot.png, scorecard.json, final_weights.pt (incl. the normalisation),
@@ -27,6 +31,10 @@ Log columns (one iteration = one batch of 2,048 env steps + its update):
     H         entropy of the Gaussian (falls as σ shrinks)                 σ   mean spread of the 6 torques
     KL        KL(π_old ‖ π_new) on the batch states                        clip  share of steps past the 1 ± 0.2 limit
     |a|>1     share of sampled torques outside [−1, 1] (clipped before they reach the robot)
+  off-policy (one row = 2,048 env steps, with one update after each step):
+    Lv        critic loss mean (Q − y)²                                    EV  explained variance of Q vs its targets y
+    Q / real  the critic's Q(s, a) next to the discounted return that really followed (> real = overestimation)
+    noise     std of the exploration noise                                 sat  share of actor torques at the tanh limit
 """
 
 from __future__ import annotations
@@ -48,10 +56,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import gymnasium as gym  # noqa: E402
 
 from rl.logger import runs_dir  # noqa: E402
+from rl.offpolicy import OffPolicyConfig, OffPolicySession  # noqa: E402
 from rl.ppo_continuous import PPOContinuousConfig, PPOContinuousSession  # noqa: E402
 
 ENVS = {"walker2d": ("Walker2d-v5", "Walker2d")}
-ALGOS = {"ppo": "PPO with a Gaussian policy (2,048-step batches, 10 epochs, clip 0.2, GAE 0.95)"}
+ALGOS = {"ppo": "PPO with a Gaussian policy (2,048-step batches, 10 epochs, clip 0.2, GAE 0.95)",
+         "ddpg": "DDPG: deterministic actor + Q(s, a) critic, replay buffer, soft target networks, Gaussian noise 0.1"}
+OFF_POLICY = {"ddpg"}
 
 _viewer = None
 
@@ -157,8 +168,11 @@ def main() -> None:
     ap.add_argument("--algo", choices=list(ALGOS), default="ppo")
     ap.add_argument("--budget", type=int, default=1_000_000, help="environment steps (default 1,000,000)")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--hidden", type=int, default=64, help="units per hidden layer (2 layers)")
-    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--hidden", type=int, default=None, help="units per hidden layer, 2 layers (default: ppo 64, ddpg 256)")
+    ap.add_argument("--lr", type=float, default=3e-4, help="learning rate (off-policy: actor and critic)")
+    ap.add_argument("--threads", type=int, default=1, help="off-policy: CPU threads for the network updates")
+    ap.add_argument("--learning-starts", type=int, default=25_000, help="off-policy: random steps before learning")
+    ap.add_argument("--expl-noise", type=float, default=0.1, help="ddpg: std of the exploration noise")
     ap.add_argument("--ent-coef", type=float, default=0.0, help="entropy bonus (default 0, as in standard PPO for MuJoCo)")
     ap.add_argument("--no-norm-obs", action="store_true", help="turn off observation normalisation")
     ap.add_argument("--no-norm-reward", action="store_true", help="turn off reward scaling")
@@ -173,9 +187,18 @@ def main() -> None:
     args = ap.parse_args()
 
     env_id, title = ENVS[args.env]
-    cfg = PPOContinuousConfig(env_id=env_id, seed=args.seed, hidden=args.hidden, lr=args.lr, ent_coef=args.ent_coef,
-                              norm_obs=not args.no_norm_obs, norm_reward=not args.no_norm_reward, total_steps=args.budget)
-    session = PPOContinuousSession(cfg)
+    off = args.algo in OFF_POLICY
+    if args.hidden is None:
+        args.hidden = 256 if off else 64
+    if off:
+        cfg = OffPolicyConfig(algo=args.algo, env_id=env_id, seed=args.seed, hidden=args.hidden, actor_lr=args.lr,
+                              critic_lr=args.lr, learning_starts=args.learning_starts, expl_noise=args.expl_noise,
+                              total_steps=args.budget, threads=args.threads)
+        session = OffPolicySession(cfg)
+    else:
+        cfg = PPOContinuousConfig(env_id=env_id, seed=args.seed, hidden=args.hidden, lr=args.lr, ent_coef=args.ent_coef,
+                                  norm_obs=not args.no_norm_obs, norm_reward=not args.no_norm_reward, total_steps=args.budget)
+        session = PPOContinuousSession(cfg)
     out = runs_dir() / args.env / args.algo
     shutil.rmtree(out, ignore_errors=True)
     (out / "episodes").mkdir(parents=True)
@@ -195,12 +218,17 @@ def main() -> None:
           f"falling, {np.mean(un['dist']):+.2f} m   (budget {args.budget:,} env steps, hidden 2×{args.hidden})\n")
     cols = ["iter", "env_steps", "score", "len", "fell", "dist", "eval_score", "eval_len", "eval_fell", "eval_dist",
             "Lv", "Lv_after", "Lpi", "H", "std", "EV", "absA", "KL", "clip_frac", "grad_norm", "lr", "act_abs",
-            "act_clipped", "reward_scale", "seconds"]
+            "act_clipped", "reward_scale", "seconds", "q_mean", "q_pred", "g_real", "noise", "sat", "buffer", "updates",
+            "gn_actor", "gn_critic"]
     f = open(out / "log.csv", "w", newline="")
     writer = csv.DictWriter(f, fieldnames=cols)
     writer.writeheader()
-    print(f"{'iter':>4} {'steps':>9} {'score':>7} {'len':>5} {'fell':>5} {'dist':>6} {'Lv (before → after)':>20} {'EV':>5} "
-          f"{'H':>6} {'σ':>5} {'KL':>7} {'clip':>5} {'|a|>1':>5} {'eval':>6}")
+    if off:
+        print(f"{'iter':>4} {'steps':>9} {'score':>7} {'len':>5} {'fell':>5} {'dist':>6} {'Lv':>9} {'EV':>5} "
+              f"{'Q':>7} {'real':>7} {'sat':>5} {'|a|>1':>5} {'eval':>6}")
+    else:
+        print(f"{'iter':>4} {'steps':>9} {'score':>7} {'len':>5} {'fell':>5} {'dist':>6} {'Lv (before → after)':>20} {'EV':>5} "
+              f"{'H':>6} {'σ':>5} {'KL':>7} {'clip':>5} {'|a|>1':>5} {'eval':>6}")
     rows: list[dict] = []
     t0 = time.time()
     it, completed = 0, False
@@ -217,10 +245,15 @@ def main() -> None:
                    "fell": float(np.mean([e["fell"] for e in fin])) if fin else last_row.get("fell"),
                    "dist": float(np.mean([e["x"] for e in fin])) if fin else last_row.get("dist"),
                    "eval_score": None, "eval_len": None, "eval_fell": None, "eval_dist": None,
-                   "Lv": s["critic_loss"], "Lv_after": s["critic_loss_after"], "Lpi": s["actor_loss"], "H": s["entropy"],
-                   "std": float(np.mean(s["std"])), "EV": s["ev"], "absA": s["mean_abs_adv"], "KL": s["kl"],
-                   "clip_frac": s["clip_frac"], "grad_norm": s["grad_norm"], "lr": s["lr"], "act_abs": s["action_abs_mean"],
-                   "act_clipped": s["action_clipped"], "reward_scale": s["reward_scale"], "seconds": round(time.time() - t0, 1)}
+                   "Lv": s["critic_loss"], "Lv_after": s.get("critic_loss_after"), "Lpi": s["actor_loss"], "H": s.get("entropy"),
+                   # exploration spread: PPO's σ (mean of the 6 joints); DDPG's noise std once learning has started
+                   "std": float(np.mean(s["std"])) if "std" in s else s.get("noise"),
+                   "EV": s["ev"], "absA": s.get("mean_abs_adv"), "KL": s.get("kl"),
+                   "clip_frac": s.get("clip_frac"), "grad_norm": s.get("grad_norm"), "lr": s.get("lr"), "act_abs": s["action_abs_mean"],
+                   "act_clipped": s["action_clipped"], "reward_scale": s.get("reward_scale"), "seconds": round(time.time() - t0, 1),
+                   "q_mean": s.get("q_mean"), "q_pred": s.get("q_pred"), "g_real": s.get("g_real"), "noise": s.get("noise"),
+                   "sat": s.get("actor_saturated"), "buffer": s.get("buffer"), "updates": s.get("updates"),
+                   "gn_actor": s.get("gn_actor"), "gn_critic": s.get("gn_critic")}
             last = session.env_steps >= args.budget
             if it == 1 or it % args.eval_every == 0 or last:
                 e = evaluate(session, env_id)
@@ -231,10 +264,16 @@ def main() -> None:
             f.flush()
             fmt = lambda v, spec: format(v, spec) if v is not None else " " * len(format(0, spec))  # noqa: E731
             ev = row["EV"] if row["EV"] is not None else float("nan")
-            print(f"{it:4d} {row['env_steps']:9,d} {fmt(row['score'], '7.0f')} {fmt(row['len'], '5.0f')} {fmt(row['fell'], '5.0%')} "
-                  f"{fmt(row['dist'], '+6.1f')} {row['Lv']:9.3f} → {row['Lv_after']:7.3f} {ev:5.2f} {row['H']:6.2f} "
-                  f"{row['std']:5.2f} {row['KL']:7.4f} {row['clip_frac']:5.0%} {row['act_clipped']:5.0%} "
-                  f"{fmt(row['eval_score'], '6.0f')}")
+            head = (f"{it:4d} {row['env_steps']:9,d} {fmt(row['score'], '7.0f')} {fmt(row['len'], '5.0f')} {fmt(row['fell'], '5.0%')} "
+                    f"{fmt(row['dist'], '+6.1f')} ")
+            if off:
+                warm = "" if s.get("learning") else "   (random actions: filling the buffer)"
+                print(head + f"{fmt(row['Lv'], '9.3f')} {ev:5.2f} {fmt(row['q_pred'], '7.1f')} {fmt(row['g_real'], '7.1f')} "
+                      f"{fmt(row['sat'], '5.0%')} {row['act_clipped']:5.0%} {fmt(row['eval_score'], '6.0f')}{warm}")
+            else:
+                print(head + f"{row['Lv']:9.3f} → {row['Lv_after']:7.3f} {ev:5.2f} {row['H']:6.2f} "
+                      f"{row['std']:5.2f} {row['KL']:7.4f} {row['clip_frac']:5.0%} {row['act_clipped']:5.0%} "
+                      f"{fmt(row['eval_score'], '6.0f')}")
             if row["eval_score"] is not None and it > 1:
                 print(f"     ↳ eval (mean action, 5 starts): score {row['eval_score']:.0f}, {row['eval_len']:.0f} steps, "
                       f"walked {row['eval_dist']:+.1f} m, fell {row['eval_fell']:.0%}   [{row['seconds'] / 60:.1f} min]")
@@ -272,7 +311,7 @@ def main() -> None:
         print("  eval score first reached: " + ", ".join(
             f"{t}: {'never' if v is None else f'{v:,} steps'}" for t, v in card["first_eval_steps"].items()))
         status("finished", it, session.env_steps)
-    print(f"\neverything saved in {out}   (watch it: uv run python scripts/play_walker2d.py --policy trained)")
+    print(f"\neverything saved in {out}   (watch it: uv run python scripts/play_walker2d.py --policy trained --algo {args.algo})")
     if args.plot:
         _plot(rows, out / "plot.png", f"{title} · {ALGOS[args.algo]}")
         print(f"plot saved: {out / 'plot.png'}")
@@ -290,25 +329,32 @@ def _plot(rows: list[dict], path: Path, title: str) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    v = lambda k, rs=rows, f=1.0: [np.nan if r.get(k) is None else r[k] * f for r in rs]  # noqa: E731
     x = [r["env_steps"] / 1e6 for r in rows]
     ev = [r for r in rows if r["eval_score"] is not None]
     xe = [r["env_steps"] / 1e6 for r in ev]
+    off = any(r.get("q_pred") is not None for r in rows)
     fig, ax = plt.subplots(2, 2, figsize=(12, 7.5))
     fig.suptitle(title)
-    ax[0, 0].plot(x, [r["score"] for r in rows], label="batch: mean score (sampled actions)")
-    ax[0, 0].plot(xe, [r["eval_score"] for r in ev], "o-", ms=3, label="eval: mean action, 5 starts")
+    ax[0, 0].plot(x, v("score"), label="training episodes: mean score (with exploration)")
+    ax[0, 0].plot(xe, v("eval_score", ev), "o-", ms=3, label="eval: deterministic action, 5 starts")
     ax[0, 0].set_title("1. Is it learning?  score (real reward)")
-    ax[0, 1].plot(x, [r["dist"] for r in rows], label="distance walked (m)")
-    ax[0, 1].plot(x, [r["len"] / 100 for r in rows], label="episode length / 100 (10 = never fell)")
+    ax[0, 1].plot(x, v("dist"), label="distance walked (m)")
+    ax[0, 1].plot(x, v("len", f=0.01), label="episode length / 100 (10 = never fell)")
     ax[0, 1].set_title("2. Walking or just standing?")
-    ax[1, 0].plot(x, [r["std"] for r in rows], label="σ: mean spread of the torques")
-    ax[1, 0].plot(x, [r["act_clipped"] for r in rows], label="share of torques clipped to ±1")
-    ax[1, 0].set_title("3. Exploration: how wide is the Gaussian?")
-    ax[1, 1].plot(x, [r["EV"] for r in rows], label="critic explained variance")
-    ax[1, 1].plot(x, [r["clip_frac"] for r in rows], label="share past the clip")
-    ax[1, 1].plot(x, [min(1.0, 10 * r["KL"]) for r in rows], label="10 × KL per update")
-    ax[1, 1].set_title("4. Critic and update size")
-    ax[1, 1].set_ylim(-0.2, 1.05)
+    ax[1, 0].plot(x, v("std"), label="exploration spread (PPO σ / DDPG noise std)")
+    ax[1, 0].plot(x, v("act_clipped"), label="share of torques clipped to ±1")
+    ax[1, 0].set_title("3. Exploration")
+    if off:
+        ax[1, 1].plot(x, v("q_pred"), label="critic: Q(s, a)")
+        ax[1, 1].plot(x, v("g_real"), label="the discounted return that really followed")
+        ax[1, 1].set_title("4. Does the critic overestimate?")
+    else:
+        ax[1, 1].plot(x, v("EV"), label="critic explained variance")
+        ax[1, 1].plot(x, v("clip_frac"), label="share past the clip")
+        ax[1, 1].plot(x, [min(1.0, 10 * r["KL"]) if r.get("KL") is not None else np.nan for r in rows], label="10 × KL per update")
+        ax[1, 1].set_title("4. Critic and update size")
+        ax[1, 1].set_ylim(-0.2, 1.05)
     for a in ax.flat:
         a.set_xlabel("million env steps")
         a.grid(alpha=0.3)

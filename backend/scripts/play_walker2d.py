@@ -6,6 +6,7 @@
     uv run python scripts/play_walker2d.py --print-every 5     # torso height, angle, speed and reward every 5 steps
     uv run python scripts/play_walker2d.py --gif walker.gif    # no window: save a GIF instead
     uv run python scripts/play_walker2d.py --policy trained    # the last trained policy (runs/walker2d/ppo)
+    uv run python scripts/play_walker2d.py --policy trained --algo ddpg
     uv run python scripts/play_walker2d.py --policy trained --run ../runs/walker2d/ppo --episodes 5
 
 The robot: a torso and two legs (thigh, leg, foot each), seen from the side, moving in 2D.
@@ -27,7 +28,8 @@ import numpy as np
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--policy", choices=["random", "zero", "trained"], default="random")
-    ap.add_argument("--run", default=None, help="with --policy trained: the run folder (default runs/walker2d/ppo)")
+    ap.add_argument("--algo", default="ppo", help="with --policy trained: which algorithm's last run (ppo, ddpg, …)")
+    ap.add_argument("--run", default=None, help="with --policy trained: a run folder instead (default runs/walker2d/<algo>)")
     ap.add_argument("--episodes", type=int, default=3)
     ap.add_argument("--slow", type=float, default=1.0, help="slow motion factor (1 = real time)")
     ap.add_argument("--print-every", type=int, default=0, help="print the state every N steps (0 = never)")
@@ -48,14 +50,13 @@ def main() -> None:
         import torch
 
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from rl.continuous import session_from_state
         from rl.logger import runs_dir
-        from rl.ppo_continuous import PPOContinuousConfig, PPOContinuousSession
 
-        path = Path(args.run) if args.run else runs_dir() / "walker2d" / "ppo"
+        path = Path(args.run) if args.run else runs_dir() / "walker2d" / args.algo
         state = torch.load(path / "final_weights.pt", weights_only=False)
-        session = PPOContinuousSession(PPOContinuousConfig(**state["config"]))
-        session.load_state_dict(state)
-        print(f"policy: {path} (the mean action, no sampling)")
+        session = session_from_state(state)
+        print(f"policy: {path} (deterministic: the mean action, no noise)")
     for ep in range(args.episodes):
         obs, _ = env.reset(seed=args.seed + ep)
         score, steps = 0.0, 0

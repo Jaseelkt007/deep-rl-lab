@@ -46,15 +46,14 @@ def play_greedy(env_id: str, env_kwargs: dict, actor_state: dict, hidden: int, n
 
 
 def play_continuous(env_id: str, state: dict, label: str, seed: int = 10_000) -> None:
-    """Continuous actions (MuJoCo): play the mean action of a PPOContinuousSession state in a window."""
+    """Continuous actions (MuJoCo): play the deterministic action of a saved PPO / DDPG / … state in a window."""
     import gymnasium as gym
     import torch
 
-    from rl.ppo_continuous import PPOContinuousConfig, PPOContinuousSession
+    from rl.continuous import session_from_state
 
     torch.set_num_threads(1)
-    session = PPOContinuousSession(PPOContinuousConfig(**state["config"]))
-    session.load_state_dict(state)
+    session = session_from_state(state)
     env = gym.make(env_id, render_mode="human")
     obs, _ = env.reset(seed=seed)
     steps, score = 0, 0.0
