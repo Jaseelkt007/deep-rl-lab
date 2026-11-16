@@ -2063,6 +2063,9 @@ export default function RunPage({ envKey = "cartpole" }: { envKey?: EnvCfg["key"
                 {e.tab}
               </Link>
             ))}
+            <Link href="/walker2d" className="rounded px-2.5 py-1 text-neutral-500 hover:text-neutral-900">
+              Walker2d
+            </Link>
           </div>
         }
       />
