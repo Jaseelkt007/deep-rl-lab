@@ -182,7 +182,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Deep RL playground", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    # any local port: Next.js moves to 3001, 3002, … when 3000 is taken by another project
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_methods=["*"],
     allow_headers=["*"],
 )
