@@ -176,7 +176,7 @@ uv run python scripts/play_walker2d.py                        # watch random tor
 uv run python scripts/train_continuous.py --algo ppo          # 1M steps; a window of the current policy every 100k steps
 uv run python scripts/play_walker2d.py --policy trained       # watch the trained policy
 ```
-Runs: `runs/walker2d/<algo>/` (log.csv, plot.png, scorecard.json, final_weights.pt, episodes/*.gif).
+Runs: `runs/walker2d/<algo>/` (log.csv, plot.png, scorecard.json, final_weights.pt, episodes/). Page: **http://localhost:3000/walker2d**, live while training: two recordings side by side (any iterations, or two algorithms) with the 6 torques, learning curves of every algorithm on one axis, and the final test.
 
 **PPO with a Gaussian policy** (`rl/ppo_continuous.py`) is the same PPO as above; only the policy's output changes:
 - The actor outputs the **mean torque μ(s) per joint**. The spread σ is one learned number per joint (log σ, starting at σ = 1), the same in every state.
