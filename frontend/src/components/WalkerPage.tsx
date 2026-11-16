@@ -19,6 +19,7 @@ const LADDER: { key: string; name: string; what: string }[] = [
   { key: "td3", name: "TD3", what: "+ two critics (take the smaller), delayed actor updates, target smoothing" },
   { key: "sac", name: "SAC", what: "+ maximum entropy: a squashed Gaussian that keeps exploring" },
 ];
+const BUILT = new Set(["ppo", "ddpg"]);
 const nameOf = (algo: string) => LADDER.find((l) => l.key === algo)?.name ?? algo;
 const JOINTS = ["hip R", "knee R", "ankle R", "hip L", "knee L", "ankle L"];
 const RIGHT = "#cc9966"; // MuJoCo's colours: right leg and torso tan, left leg purple
@@ -136,6 +137,29 @@ function MultiChart({ runs, pick, title, help, yRange, yLog, points }: {
     <div>
       <ChartTitle help={help}>{title}</ChartTitle>
       <UChart x={x} ys={ys} series={series} height={170} yRange={yRange} yLog={yLog} sync="walker" xLabel="million env steps" />
+    </div>
+  );
+}
+
+/** Off-policy critics: Q(s, a) (solid) next to the discounted return that really followed (dashed), per algorithm. */
+function QChart({ runs }: { runs: Run[] }) {
+  const withQ = runs.filter((r) => r.rows.some((row) => row.q_pred != null));
+  const { x, ys } = useMemo(() => {
+    const q = align(withQ, (r) => r.q_pred);
+    const g = align(withQ, (r) => r.g_real);
+    return { x: q.x, ys: withQ.flatMap((_, i) => [q.ys[i], g.ys[i]]) };
+  }, [withQ]);
+  if (!withQ.length) return null;
+  const series: SeriesSpec[] = withQ.flatMap((r) => [
+    { label: `${nameOf(r.algo)}: Q(s, a)`, color: colorOf(r.algo), width: 1.8, group: r.algo },
+    { label: `${nameOf(r.algo)}: real return`, color: colorOf(r.algo), width: 1.2, dash: [4, 3], group: r.algo },
+  ]);
+  return (
+    <div>
+      <ChartTitle help="Off-policy critics only. Solid: the critic's Q(s, a) on the steps the agent took. Dashed: the discounted return that really followed those steps (γ = 0.99), on episodes that started and ended in the same 2,048 steps, at steps where the episode fell or had at least 459 steps left (so the cut at the time limit weighs under 1%). Solid above dashed = the critic overestimates; the actor then chases actions whose value is an error. DDPG is known for this; TD3's two critics are the fix.">
+        Critic: Q(s, a) vs the return that really followed
+      </ChartTitle>
+      <UChart x={x} ys={ys} series={series} height={170} sync="walker" xLabel="million env steps" />
     </div>
   );
 }
@@ -475,7 +499,7 @@ export default function WalkerPage() {
                   <div className={`rounded-md border px-2.5 py-1.5 text-[12px] ${have.has(l.key) ? "border-neutral-300 bg-white" : "border-dashed border-neutral-200 bg-neutral-50 text-neutral-400"}`} title={l.what}>
                     <div className="font-medium" style={have.has(l.key) ? { color: colorOf(l.key) } : undefined}>{l.name}</div>
                     <div className="max-w-[220px] text-[11px] leading-tight text-neutral-500">{l.what}</div>
-                    {k === 0 || have.has(l.key) ? (
+                    {BUILT.has(l.key) ? (
                       <button className="mt-1 rounded border border-neutral-300 px-1.5 py-0.5 font-mono text-[10px] hover:bg-neutral-50" onClick={() => copy(COMMAND(l.key), l.key)}>
                         {copied === l.key ? "copied ✓" : "copy train command"}
                       </button>
@@ -502,16 +526,17 @@ export default function WalkerPage() {
               <Replay runs={runs} />
               <Panel
                 title="Learning curves (every algorithm on the same axis: environment steps)"
-                help="One point per iteration. For PPO, an iteration is one batch of 2,048 steps plus its update. Click a legend entry to hide that algorithm on every chart."
+                help="One point per 2,048 environment steps. PPO: one batch plus its update (320 gradient steps). DDPG: 2,048 steps with one update after each (2,048 gradient steps), after the first 25,000 random steps. Click a legend entry to hide that algorithm on every chart."
               >
                 <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-3">
-                  <MultiChart runs={runs} pick={pick.eval} points title="Score of the mean action (5 fixed starts)" help="Every 10 iterations: the policy without sampling (it always takes the mean torque) plays 5 episodes from fixed starts. Real reward. About 1,000 = stands for the whole episode; 3,000–4,000 = walks well." />
-                  <MultiChart runs={runs} pick={pick.score} title="Score while training (sampled actions)" help="The mean return of the episodes that ended in each batch, with the actions sampled from the Gaussian as in training. Lower than the mean action's score while σ is large: the noise makes it stumble." />
+                  <MultiChart runs={runs} pick={pick.eval} points title="Score of the mean action (5 fixed starts)" help="Every 10 iterations: the policy without exploration (PPO: the mean torque; DDPG: μ(s) without noise) plays 5 episodes from fixed starts. Real reward. About 1,000 = stands for the whole episode; 3,000–5,000 = walks well." />
+                  <MultiChart runs={runs} pick={pick.score} title="Score while training (sampled actions)" help="The mean return of the training episodes that ended in each 2,048 steps, with exploration (PPO: sampled from the Gaussian; DDPG: μ(s) + noise, and pure random torques for the first 25,000 steps). Lower than the evaluation while the noise makes it stumble." />
                   <MultiChart runs={runs} pick={pick.dist} title="Distance walked per episode (m)" help="Where the torso was when the episode ended. Separates walking from standing: a standing policy can score ~1,000 with almost 0 m." />
                   <MultiChart runs={runs} pick={pick.len} yRange={[0, 1000]} title="Episode length (1,000 = never fell)" help="Steps until the walker fell (torso too low, too high or tilted more than 1 rad) or reached the 1,000-step limit." />
-                  <MultiChart runs={runs} pick={pick.std} title="σ: the spread of the Gaussian (mean of the 6 joints)" help="How much the policy explores. It starts at 1 and shrinks as the policy becomes sure. PPO learns σ through the clipped objective; there is no entropy bonus here." />
+                  <MultiChart runs={runs} pick={pick.std} title="Exploration: spread of the torque noise" help="PPO: σ of its Gaussian (mean of the 6 joints), learned: it starts at 1 and shrinks as the policy becomes sure. DDPG: the std of the noise added to its deterministic torques, fixed at 0.1 (empty during the first 25,000 random steps)." />
                   <MultiChart runs={runs} pick={pick.clipped} yRange={[0, 1]} title="Share of sampled torques clipped to ±1" help="The Gaussian can sample torques outside [−1, 1]; they are cut to the limit before reaching the robot, but log π still uses the uncut value. A large share means the policy pushes against the limits. SAC avoids this with a tanh squash." />
-                  <MultiChart runs={runs} pick={pick.ev} yRange={[-0.2, 1]} title="Critic: explained variance" help="1 = the critic predicts its targets (GAE targets, scaled rewards); 0 = no better than a constant." />
+                  <MultiChart runs={runs} pick={pick.ev} yRange={[-0.2, 1]} title="Critic: explained variance" help="1 = the critic predicts its targets; 0 = no better than a constant. PPO: V(s) against its GAE targets (scaled rewards). DDPG: Q(s, a) against y = r + γ·Q_tgt(s′, μ_tgt(s′)) on its minibatches. A high value does not mean the critic is right: its targets come from itself." />
+                  <QChart runs={runs} />
                   <MultiChart runs={runs} pick={pick.kl} yLog title="KL(π_old ‖ π_new) per update" help="How far one update moved the Gaussian, averaged over the batch states (closed form for two Gaussians). The learning rate falls linearly to 0, so it shrinks towards the end." />
                   <MultiChart runs={runs} pick={pick.fell} yRange={[0, 1]} title="Share of episodes that fell" help="Of the episodes that ended in each batch, the share that fell (the rest reached the 1,000-step limit)." />
                 </div>
