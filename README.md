@@ -166,6 +166,24 @@ Runs: `runs/lunarlander/<algo>/`; page: **http://localhost:3000/lunarlander**.
 
 **With wind:** `--env lunarlander_wind` turns on Gymnasium's wind (a steady push of 15 that slowly changes direction) and random gusts (1.5) while the lander is in the air. The agent does not see them, only their effect on its speed. The hand-written controller drops from 241 (90% of starts ≥ 200) to 123 (54%). `--wind-power`, `--turbulence` and `--gravity` (also for plain `lunarlander`) change the settings; they are saved with the run and shown on the page (**/lunarlander-wind**). Watch first: `uv run python scripts/play_lunarlander.py --policy heuristic --wind`.
 
+## Walker2d: continuous actions (MuJoCo)
+
+A 2D robot (torso, two legs with thigh, leg and foot) has to walk forward without falling. State: 17 numbers. Action: **6 continuous torques** in [−1, 1], one per joint, instead of a few buttons. Reward per step: forward speed + 1 for staying up − 0.001·Σ torque². The episode ends when it falls or after 1,000 steps. A random policy falls after about 20 steps; with no torque at all it lasts ~110 steps, so **standing still already earns about 1 point per step**: a policy can score ~1,000 without walking (the final test counts these).
+
+```bash
+cd backend
+uv run python scripts/play_walker2d.py                        # watch random torques (--policy zero: none; --gif out.gif: no window)
+uv run python scripts/train_continuous.py --algo ppo          # 1M steps; a window of the current policy every 100k steps
+uv run python scripts/play_walker2d.py --policy trained       # watch the trained policy
+```
+Runs: `runs/walker2d/<algo>/` (log.csv, plot.png, scorecard.json, final_weights.pt, episodes/*.gif).
+
+**PPO with a Gaussian policy** (`rl/ppo_continuous.py`) is the same PPO as above; only the policy's output changes:
+- The actor outputs the **mean torque μ(s) per joint**. The spread σ is one learned number per joint (log σ, starting at σ = 1), the same in every state.
+- An action is sampled as a = μ + σ·ε; the robot gets clip(a, −1, 1), and log π(a|s) = Σ_joints log N(a; μ, σ²) uses the unclipped a.
+- The ratio, the clip, GAE and the critic are unchanged. No KL term is needed to keep the policy Gaussian: it is Gaussian by construction. KL to the old policy is only logged.
+- Standard MuJoCo settings: observation normalisation (running mean/std), reward scaling, 2×64 tanh networks with orthogonal start, one Adam (lr 3e-4 falling to 0), gradient clip 0.5.
+
 ## Other scripts
 
 ```bash
