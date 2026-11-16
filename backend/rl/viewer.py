@@ -43,3 +43,30 @@ def play_greedy(env_id: str, env_kwargs: dict, actor_state: dict, hidden: int, n
         env.close()
     result = f"score {score:.0f}" if score_judged else f"{steps} steps"
     print(f"     ↳ window ({label}) finished: {result}", flush=True)
+
+
+def play_continuous(env_id: str, state: dict, label: str, seed: int = 10_000) -> None:
+    """Continuous actions (MuJoCo): play the mean action of a PPOContinuousSession state in a window."""
+    import gymnasium as gym
+    import torch
+
+    from rl.ppo_continuous import PPOContinuousConfig, PPOContinuousSession
+
+    torch.set_num_threads(1)
+    session = PPOContinuousSession(PPOContinuousConfig(**state["config"]))
+    session.load_state_dict(state)
+    env = gym.make(env_id, render_mode="human")
+    obs, _ = env.reset(seed=seed)
+    steps, score = 0, 0.0
+    try:
+        while True:
+            obs, r, term, trunc, info = env.step(session.act(obs))
+            steps += 1
+            score += float(r)
+            if term or trunc:
+                break
+    finally:
+        env.close()
+    how = "fell" if term else "still up at the time limit"
+    print(f"     ↳ window ({label}) finished: score {score:.0f}, {steps} steps, walked {info['x_position']:+.1f} m ({how})",
+          flush=True)
