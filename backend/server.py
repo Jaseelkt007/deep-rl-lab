@@ -408,7 +408,8 @@ def _num(v: str):
 
 CLI_ENVS = {"cartpole": "cli", "double_cartpole": "double_cartpole",  # ?env=... -> folder in runs/
             "double_cartpole_joint": "double_cartpole_joint", "mountaincar": "mountaincar",
-            "mountaincar_energy": "mountaincar_energy", "lunarlander": "lunarlander", "lunarlander_wind": "lunarlander_wind"}
+            "mountaincar_energy": "mountaincar_energy", "lunarlander": "lunarlander", "lunarlander_wind": "lunarlander_wind",
+            "walker2d": "walker2d"}  # walker2d: continuous actions, written by scripts/train_continuous.py
 
 
 def _cli_root(env: str):
@@ -476,7 +477,8 @@ def cli_algos(env: str = "cartpole") -> list[dict]:
         out.append(clean({
             "algo": d.name, "settings": json.loads(settings.read_text()), "status": _cli_json(d / "status.json") or {},
             "scorecard": _cli_json(d / "scorecard.json"),
-            "speed": [{k: r.get(k) for k in ("iter", "env_steps", "ret", "eval", "KL", "clip_frac", "score", "eval_score")}
+            "speed": [{k: r.get(k) for k in ("iter", "env_steps", "ret", "eval", "KL", "clip_frac", "score", "eval_score",
+                                             "eval_dist", "dist")}
                       for r in rows],
             "inner": _inner_summary(rows, _cli_per_epoch(d), env),
         }))
@@ -488,8 +490,8 @@ def _cli_episodes(d) -> list[dict]:
     for p in sorted((d / "episodes").glob("*.json")):
         ep = json.loads(p.read_text())
         kind = ep.get("kind") or ("good" if ep["name"] == "good" else "greedy")  # older runs: no kind
-        out.append({**{k: ep[k] for k in ("name", "iter", "steps", "terminated")}, "kind": kind,
-                    "score": ep.get("score"), "outcome": ep.get("outcome")})
+        out.append({**{k: ep.get(k) for k in ("name", "iter", "steps", "terminated")}, "kind": kind,
+                    "score": ep.get("score"), "outcome": ep.get("outcome"), "distance": ep.get("distance")})
     return out
 
 

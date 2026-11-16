@@ -111,7 +111,7 @@ def test_cli_endpoints(client, tmp_path):
     algos = client.get("/api/cli/algos").json()
     assert [a["algo"] for a in algos] == ["ppo"] and algos[0]["speed"][1] == {"iter": 2.0, "env_steps": 4096.0, "ret": 12.6, "eval": None,
                                                                          "KL": None, "clip_frac": None, "score": None,
-                                                                         "eval_score": None}
+                                                                         "eval_score": None, "eval_dist": None, "dist": None}
     inner = algos[0]["inner"]  # averaged over iterations 1 and 2 (both still learning)
     assert inner["epoch"] == [1.0, 2.0] and inner["kl"] == pytest.approx([0.015, 0.04]) and inner["n_iters"] == 2
     r = client.get("/api/cli/run/ppo").json()
@@ -119,9 +119,26 @@ def test_cli_endpoints(client, tmp_path):
     assert len(r["per_epoch"]) == 4 and r["per_epoch"][3]["r_max"] == 2.0
     assert client.get("/api/cli/run/ppo/episode/iter0001").json()["actions"] == [0, 1, 0]
     assert client.get("/api/cli/run/ppo/episodes").json() == [{"name": "iter0001", "iter": 1, "steps": 3, "terminated": True,
-                                                                 "kind": "greedy", "score": None, "outcome": None}]
+                                                                 "kind": "greedy", "score": None, "outcome": None,
+                                                                 "distance": None}]
     assert client.get("/api/cli/run/ppo/episode/..%2Fsettings").status_code == 404
     assert client.get("/api/cli/run/nope").status_code == 404
+
+
+def test_cli_walker2d(client, tmp_path):
+    """Walker2d runs (scripts/train_continuous.py) are served under ?env=walker2d; recordings have a distance."""
+    import json as _json
+
+    d = tmp_path / "walker2d" / "ppo" / "episodes"
+    d.mkdir(parents=True)
+    (d.parent / "settings.json").write_text(_json.dumps({"algo": "ppo", "env": "walker2d", "continuous": True, "config": {}}))
+    (d.parent / "log.csv").write_text("iter,env_steps,score,dist,eval_score,eval_dist\n1,2048,12.5,0.3,120.0,0.1\n")
+    (d / "iter0001.json").write_text(_json.dumps({"name": "iter0001", "iter": 1, "kind": "greedy", "steps": 112,
+                                                  "terminated": True, "score": 125.0, "distance": 0.11, "frames": [[0.0] * 28]}))
+    algos = client.get("/api/cli/algos?env=walker2d").json()
+    assert algos[0]["algo"] == "ppo" and algos[0]["speed"][0]["eval_dist"] == 0.1
+    assert client.get("/api/cli/run/ppo/episodes?env=walker2d").json()[0]["distance"] == 0.11
+    assert len(client.get("/api/cli/run/ppo/episode/iter0001?env=walker2d").json()["frames"][0]) == 28
 
 
 def test_cli_endpoints_per_environment(client, tmp_path):
