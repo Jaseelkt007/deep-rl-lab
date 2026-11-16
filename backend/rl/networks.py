@@ -41,6 +41,20 @@ class Actor(MLP):
         super().__init__(obs_dim, tuple(hidden), n_actions, activation)
 
 
+class GaussianActor(MLP):
+    """Continuous actions: the network outputs the MEAN μ(s) of each action dimension; the spread σ is one
+    learned number per dimension, the same in every state (log σ, so σ = exp(log σ) is always positive).
+    π(a|s) = Π_j N(a_j; μ_j(s), σ_j²)."""
+
+    def __init__(self, obs_dim: int, act_dim: int, hidden=(64, 64), activation="tanh", log_std_init: float = 0.0):
+        super().__init__(obs_dim, tuple(hidden), act_dim, activation)
+        self.log_std = nn.Parameter(torch.full((act_dim,), float(log_std_init)))
+
+    def dist(self, x: torch.Tensor) -> torch.distributions.Normal:
+        mu = super().forward(x)
+        return torch.distributions.Normal(mu, self.log_std.exp().expand_as(mu))
+
+
 class Critic(MLP):
     """Outputs V(s), a scalar per state."""
 
