@@ -11,8 +11,10 @@
 
 The LATEST run of each algorithm is saved in runs/<env>/<algo>/, replaced by the next run:
     log.csv, settings.json, status.json, plot.png, scorecard.json, final_weights.pt (incl. the normalisation),
-    episodes/iterNNNN.gif + .json   the current policy (mean action) from a fixed start, every --record-every
-                                    iterations; the JSON holds the joint positions per step (for the web page)
+    episodes/iterNNNN.json (+ .gif) the current policy (mean action) from a fixed start, every --record-every
+                                    iterations; the JSON holds the body's capsules and the 6 torques per frame;
+                                    a GIF every --gif-every iterations
+Watch it learn on the web page: http://localhost:3000/walker2d (live while training)
 Watch a saved policy:  uv run python scripts/play_walker2d.py --policy trained
 
 Log columns (one iteration = one batch of 2,048 env steps + its update):
@@ -93,27 +95,59 @@ def evaluate(session, env_id: str, episodes: int = 5, seed0: int = 10_000, max_s
     return {"scores": scores, "lens": lens, "fell": fell, "dist": dist}
 
 
-def record_episode(session, env_id: str, folder: Path, name: str) -> dict:
-    """One episode of the mean action from a fixed start: a GIF, and the joint positions per step as JSON."""
+# Walker2d's 7 capsules, drawn by the web page: behind (left leg), torso, front (right leg)
+GEOMS = ("thigh_left_geom", "leg_left_geom", "foot_left_geom", "torso_geom", "thigh_geom", "leg_geom", "foot_geom")
+FRAME_EVERY = 2  # keep every 2nd step (62.5 frames per simulated second)
+
+
+def body_segments(env) -> list[float]:
+    """Both end points (x, z) of every capsule, as MuJoCo places them: centre ± half-length along the capsule axis."""
+    import mujoco
+
+    m, d = env.unwrapped.model, env.unwrapped.data
+    mujoco.mj_kinematics(m, d)
+    out = []
+    for name in GEOMS:
+        g = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, name)
+        c, axis = d.geom_xpos[g], d.geom_xmat[g].reshape(3, 3)[:, 2] * m.geom_size[g][1]
+        out += [c[0] - axis[0], c[2] - axis[2], c[0] + axis[0], c[2] + axis[2]]
+    return [round(float(v), 3) for v in out]
+
+
+def record_episode(session, env_id: str, folder: Path, it: int, gif: bool = True) -> dict:
+    """One episode of the mean action from a fixed start: a GIF, and the body's capsules per frame as JSON
+    (the web page draws and replays the walker from them, with the 6 torques)."""
+    import mujoco
     from PIL import Image
 
-    env = gym.make(env_id, render_mode="rgb_array", width=320, height=240)
+    env = gym.make(env_id, **({"render_mode": "rgb_array", "width": 320, "height": 240} if gif else {}))
     obs, _ = env.reset(seed=10_000)
-    frames, qpos, actions, score = [], [], [], 0.0
+    m = env.unwrapped.model
+    radii = [round(float(m.geom_size[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, n)][0]), 3) for n in GEOMS]
+    images, frames, actions, score, n = [], [], [], 0.0, 0
     while True:
         a = session.act(obs)
-        qpos.append([round(float(v), 4) for v in env.unwrapped.data.qpos])
-        actions.append([round(float(v), 3) for v in a])
-        if len(qpos) % 4 == 1:  # every 4th frame keeps the GIF small (125 fps → ~31 fps)
-            frames.append(Image.fromarray(env.render()))
+        if n % FRAME_EVERY == 0:
+            frames.append(body_segments(env))
+            actions.append([round(float(v), 3) for v in a])
+        if gif and n % 4 == 0:  # every 4th frame keeps the GIF small (125 fps → ~31 fps)
+            images.append(Image.fromarray(env.render()))
         obs, r, term, trunc, info = env.step(a)
         score += float(r)
+        n += 1
         if term or trunc:
             break
+    frames.append(body_segments(env))  # the final pose
+    actions.append(actions[-1])
     env.close()
-    info_out = {"name": name, "steps": len(actions), "fell": bool(term), "score": score, "distance": float(info["x_position"])}
-    (folder / f"{name}.json").write_text(json.dumps({**info_out, "qpos": qpos, "actions": actions}))
-    frames[0].save(folder / f"{name}.gif", save_all=True, append_images=frames[1:], duration=32, loop=0)
+    name = f"iter{it:04d}"
+    info_out = {"name": name, "iter": it, "kind": "greedy", "steps": n, "terminated": bool(term), "score": score,
+                "distance": float(info["x_position"])}
+    (folder / f"{name}.json").write_text(json.dumps({
+        **info_out, "dt": float(env.unwrapped.dt), "every": FRAME_EVERY, "env_steps": session.env_steps,
+        "geoms": [{"name": g, "radius": r} for g, r in zip(GEOMS, radii)], "frames": frames, "actions": actions}))
+    if gif:  # ~4 MB for a 1,000-step episode, so only every --gif-every iterations
+        images[0].save(folder / f"{name}.gif", save_all=True, append_images=images[1:], duration=32, loop=0)
     return info_out
 
 
@@ -129,7 +163,8 @@ def main() -> None:
     ap.add_argument("--no-norm-obs", action="store_true", help="turn off observation normalisation")
     ap.add_argument("--no-norm-reward", action="store_true", help="turn off reward scaling")
     ap.add_argument("--eval-every", type=int, default=10, help="evaluate the mean action every N iterations")
-    ap.add_argument("--record-every", type=int, default=25, help="save a GIF of the mean action every N iterations")
+    ap.add_argument("--record-every", type=int, default=10, help="record the mean action (GIF + JSON for the web page) every N iterations")
+    ap.add_argument("--gif-every", type=int, default=50, help="also save a GIF every N iterations (and the first and last)")
     ap.add_argument("--render-every-steps", type=int, default=100_000,
                     help="show the policy in a window each time training passes another N env steps (0 = never)")
     ap.add_argument("--quality-starts", type=int, default=20, help="start states in the final test")
@@ -204,8 +239,10 @@ def main() -> None:
                 print(f"     ↳ eval (mean action, 5 starts): score {row['eval_score']:.0f}, {row['eval_len']:.0f} steps, "
                       f"walked {row['eval_dist']:+.1f} m, fell {row['eval_fell']:.0%}   [{row['seconds'] / 60:.1f} min]")
             if it == 1 or it % args.record_every == 0 or last:
-                rec = record_episode(session, env_id, out / "episodes", f"iter{it:04d}")
-                print(f"     ↳ recorded the mean action: {rec['steps']} steps, {rec['distance']:+.1f} m (episodes/iter{it:04d}.gif)")
+                gif = it == 1 or it % args.gif_every == 0 or last
+                rec = record_episode(session, env_id, out / "episodes", it, gif)
+                print(f"     ↳ recorded the mean action: {rec['steps']} steps, {rec['distance']:+.1f} m"
+                      + (f" (episodes/iter{it:04d}.gif)" if gif else ""))
             if args.render_every_steps and session.env_steps // args.render_every_steps > prev // args.render_every_steps:
                 show_window(session, f"{session.env_steps:,} env steps", env_id)
             status("running", it, session.env_steps)
