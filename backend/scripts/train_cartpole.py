@@ -147,7 +147,8 @@ def make_session(algo: str, args):
             raise SystemExit("--batch / --batch-steps size PPO batches; DQN has a replay buffer instead")
         cfg = DQNConfig(**{**DQN_VARIANTS[algo], "env_id": SPEC.env_id, "seed": args.seed, "gamma": args.gamma,
                            "hidden": pick(args.hidden, SPEC.hidden), "total_steps": args.budget, "shaping": SPEC.shaping,
-                           "env_kwargs": SPEC.env_kwargs, **({"lr": args.actor_lr} if args.actor_lr is not None else {})})
+                           "env_kwargs": SPEC.env_kwargs, **({"lr": args.actor_lr} if args.actor_lr is not None else {}),
+                           **({"target_every": args.target_every} if args.target_every is not None else {})})
         return DQNSession(cfg), cfg.model_dump()
     base = {**PPOConfig().model_dump(), **VARIANTS[algo]}
     if args.batch is not None and args.batch_steps is not None:
@@ -534,6 +535,9 @@ def main() -> None:
     ap.add_argument("--actor-lr", type=float, default=None, help="default: the algorithm's own")
     ap.add_argument("--critic-lr", type=float, default=None, help="default: the algorithm's own")
     ap.add_argument("--gamma", type=float, default=0.99)
+    ap.add_argument("--target-every", type=int, default=None,
+                    help="dqn: copy the Q-network into the target network every N env steps (default 1,000). Each copy is "
+                         "about one round of value iteration, so a short budget needs a smaller N (MountainCar 200k: 100)")
     ap.add_argument("--optimizer", choices=["adam", "sgd"], default="adam")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--eval-every", type=int, default=None,
@@ -601,7 +605,8 @@ def train(algo: str, args) -> None:
     (out_dir / "episodes").mkdir(parents=True)
     csv_path = out_dir / "log.csv"
     (out_dir / "settings.json").write_text(json.dumps(
-        {"algo": algo, "algo_name": ALGOS[algo], "env": SPEC.key, "env_id": SPEC.env_id, "budget": args.budget,
+        {"algo": algo, "algo_name": ALGOS[algo] if algo != "dqn" or args.target_every is None
+        else f"DQN: + target network (copied every {args.target_every:,} steps)", "env": SPEC.key, "env_id": SPEC.env_id, "budget": args.budget,
          "seed": args.seed, "config": resolved}, indent=2))
     started = time.strftime("%Y-%m-%d %H:%M:%S")
 
