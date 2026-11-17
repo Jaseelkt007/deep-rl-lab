@@ -11,6 +11,16 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
     "mujoco>=4.0.1",
+    "jax>=0.10.2",
+    "optax>=0.2.9",
+    "jax2d>=1.0.2",
+    "chex>=0.1.92",
+    "flax>=0.12.8",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "jax[cuda12]>=0.10.2",
 ]
 
 [dependency-groups]
